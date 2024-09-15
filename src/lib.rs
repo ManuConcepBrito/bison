@@ -1,9 +1,11 @@
 use jiter::{map_json_error, PartialMode, PythonParse, StringCacheMode};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
+use pyo3::PyErr;
 use pyo3::PyObject;
 use pythonize::{depythonize, pythonize};
-use serde_json::{to_vec, Map, Result, Value};
+use serde_json::{to_vec, Map, Value};
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::fs;
@@ -17,7 +19,11 @@ use std::path::PathBuf;
 use uuid::Uuid;
 
 trait Query: Debug {
-    fn execute(&self, collection: Map<String, Value>) -> bool;
+    fn execute(&self, collection: &Map<String, Value>) -> bool;
+}
+
+trait QueryOperators: Debug {
+    fn execute(&self, v1: Value, v2: Value) -> bool;
 }
 
 #[derive(Debug)]
@@ -27,9 +33,24 @@ struct EqualQuery {
 }
 
 impl Query for EqualQuery {
-    fn execute(&self, collection: Map<String, Value>) -> bool {
-        // TODO
-        false
+    fn execute(&self, collection: &Map<String, Value>) -> bool {
+        let mut current_value = collection;
+
+        for key in &self.fields[..self.fields.len() - 1] {
+            match current_value.get(key) {
+                Some(Value::Object(map)) => {
+                    current_value = map;
+                }
+                _ => {
+                    return false;
+                }
+            }
+        }
+        let last_key = &self.fields[self.fields.len() - 1];
+        match current_value.get(last_key) {
+            Some(value) => value == &self.value,
+            None => false,
+        }
     }
 }
 
@@ -43,20 +64,6 @@ struct QueryEngine {
     queries: Vec<Box<dyn Query>>,
 }
 
-pub fn _parse_query(sub_query: &Value, key: &str, fields: &mut Vec<String>) -> Value {
-    fields.push(key.to_string());
-    let value: Value = match sub_query {
-        Value::Object(map) => map
-            .into_iter()
-            .map(|(key, val)| return _parse_query(val, key, fields))
-            .collect(),
-        Value::Bool(b) => Value::Bool(*b),
-        Value::Number(n) => Value::Number(n.clone()),
-        Value::String(s) => Value::String(s.to_string()),
-        _ => panic!("Not Valid query"),
-    };
-    return value;
-}
 impl QueryEngine {
     pub fn new(unparsed_query: &Map<String, Value>) -> Self {
         let queries: Vec<Box<dyn Query>> = unparsed_query
@@ -69,101 +76,49 @@ impl QueryEngine {
             .collect();
         QueryEngine { queries }
     }
+    fn execute(&self, collection: &Map<String, Value>) -> bool {
+        self.queries.iter().all(|q| q.execute(collection))
+    }
 }
-// pub fn parse_query(unparsed_query: &Value) -> Value {
-// let mut fields: Vec<String> = Vec::new();
-// let mut values: Vec<Values> = Vec::new();
-// match unparsed_query {
-//     Value::Object(map) => {
-//         for (key, val) in map {
-//             fields.push(key.to_string);
-//             match val {
-//                 Value::Object(inner) =>
-//             }
-//         }
-//     }
-//
-// }
-// let mut value: Value = match unparsed_query {
-//     Value::Object(map) => {
-//         for (key, val) in map {
-//             fields.push(key.to_string());
-//             return parse_query(val.into(), fields)
-//         }
-//     },
-//     Value::Bool(b) => b,
-//     Value::String(s) => s,
-//     Value::Number(n) => n,
-//     _ => panic!("Invalid Query")
-// };
-// return value
 
-/*
-* Simple query: {"a": 3} => a is equal to 3
-* Concatenated simple queries {"a": 3, "b": 4} a == 3 AND b == 3
-* {"a": {"$ne": 3}, "b": 3}
-* Query building:
-*
-* Query object => Each condition in a query is a separate query object
-* QueryEngine({"a": 3, "b": 4, "c": {"$ne": 4} }) =>
-* Query({"a": 3}), Query({"b": 4}, Query({"c": {"$ne": 4} })
-*
-*
-*
-* Each query has an execute fn which takes
-* a Map<String, Value> (collection) and returns a
-* bool if the condition is true
-*
-*
-*
-*
-* Naive solution: O(m * n) m = number of keys in query and n = number of documents in table
-* found = False
-* found_elements_idx = []
-* for key, value in query:
-*     for idx, collection in collections:
-*       if collection[key] == value:
-*           found_elements_idx.append(idx)
-*
-*
-*
-*
-*
-* */
+pub fn _parse_query(sub_query: &Value, key: &str, fields: &mut Vec<String>) -> Value {
+    fields.push(key.to_string());
+    let value: Value = match sub_query {
+        Value::Object(map) => map
+            .into_iter()
+            .find_map(|(key, val)| return Some(_parse_query(val, key, fields)))
+            .expect("Error while parsing query"),
+        Value::Bool(b) => Value::Bool(*b),
+        Value::Number(n) => Value::Number(n.clone()),
+        Value::String(s) => Value::String(s.to_string()),
+        _ => panic!("Not Valid query"),
+    };
+    return value;
+}
 
-// fn value_to_object( val: &Value, py: Python<'_> ) -> PyObject {
-//     match val {
-//         Value::Null => py.None(),
-//         Value::Bool( x ) => x.to_object( py ),
-//         Value::Number( x ) => {
-//             let oi64 = x.as_i64().map( |i| i.to_object( py ) );
-//             let ou64 = x.as_u64().map( |i| i.to_object( py ) );
-//             let of64 = x.as_f64().map( |i| i.to_object( py ) );
-//             oi64.or( ou64 ).or( of64 ).expect( "number too large" )
-//         },
-//         Value::String( x ) => x.to_object( py ),
-//         Value::Array( x ) => {
-//             let inner: Vec<_> = x.iter().map(|x| value_to_object(x, py)).collect();
-//             inner.to_object( py )
-//         },
-//         Value::Object( x ) => {
-//             let inner: HashMap<_, _> =
-//                 x.iter()
-//                     .map( |( k, v )| ( k, value_to_object( v, py ) ) ).collect();
-//             inner.to_object( py )
-//         },
-//     }
-// }
-//
-// #[repr(transparent)]
-// #[derive( Clone, Debug )]
-// struct ParsedValue( Value );
-//
-// impl ToPyObject for ParsedValue {
-//     fn to_object( &self, py: Python<'_> ) -> PyObject {
-//         value_to_object( &self.0, py )
-//     }
-// }
+pub fn extract_collection(file: File, collection_name: String) -> Result<Vec<Value>, PyErr> {
+    let reader = BufReader::new(file);
+
+    // Deserialize JSON from the reader
+    let parsed: Value = serde_json::from_reader(reader)
+        .map_err(|_| PyErr::new::<PyValueError, _>("Error deserializing JSON"))?;
+
+    // Ensure the parsed JSON is an object and get a reference to it
+    let collection = parsed
+        .as_object()
+        .ok_or_else(|| PyErr::new::<PyValueError, _>("Error in collection deserialization"))?;
+
+    // Get the collection array from the object
+    let collection_array = collection
+        .get(&collection_name)
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| {
+            PyErr::new::<PyValueError, _>(
+                "Collection does not contain collection key or is not an array",
+            )
+        })?;
+    Ok(collection_array.to_vec())
+}
 
 #[pyclass]
 pub struct Bison {
@@ -304,17 +259,8 @@ impl Bison {
                 )));
             }
         };
-
-        let reader = BufReader::new(file);
-        let mut parsed: Value = match serde_json::from_reader(reader) {
-            Ok(data) => data,
-            Err(_) => {
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                    "Error deserializing JSON",
-                ));
-            }
-        };
-        let mut query: Value = match maybe_query {
+        let collection = extract_collection(file, collection_name).unwrap();
+        let query: Value = match maybe_query {
             Some(q) => depythonize(q).unwrap(),
             None => {
                 let py_collections = {
@@ -322,7 +268,7 @@ impl Bison {
                     let mut py_error: Option<PyErr> = None;
 
                     Python::with_gil(|py| {
-                        match pythonize(py, &parsed) {
+                        match pythonize(py, &collection) {
                             Ok(obj) => {
                                 // Convert &PyAny to PyObject
                                 let py_obj = obj.to_object(py);
@@ -341,30 +287,22 @@ impl Bison {
             }
         };
         let query_object: &Map<String, Value> = query.as_object().unwrap();
-
         let query_engine = QueryEngine::new(query_object);
-        println!("Query engine is {:?}", query_engine);
-        // let _: Vec<_> = query_object
-        //     .into_iter()
-        //     .map(|(key, sub_query)| {
-        //         let mut fields = Vec::new();
-        //         let value = _parse_query(sub_query, key, &mut fields);
-        //         println!("Value found {:?}", value);
-        //         println!("Fields found {:?}", fields);
-        //     })
-        //     .collect();
-
-        // if let Some(Value::Array(collections)) = parsed.get_mut(collection_name) {
-        //     collections.iter().find()
-        //
-        // }
-
+        // execute queries and return collections
+        let found_collections: Vec<Value> = collection
+            .into_iter()
+            .filter(|c| {
+                let c_obj = c.as_object().unwrap();
+                let result: bool = query_engine.execute(c_obj);
+                result
+            })
+            .collect();
         let py_collections = {
             let mut result: Option<PyObject> = None;
             let mut py_error: Option<PyErr> = None;
 
             Python::with_gil(|py| {
-                match pythonize(py, &parsed) {
+                match pythonize(py, &found_collections) {
                     Ok(obj) => {
                         // Convert &PyAny to PyObject
                         let py_obj = obj.to_object(py);
@@ -381,7 +319,6 @@ impl Bison {
         };
 
         Ok(py_collections)
-        // 2) support simple queries {key: value}
 
         // 3) support projections, specify key: 1 or 0. If value is 0 field is not shown, if value
         //    is 1 field is shown
@@ -405,26 +342,6 @@ impl Collection {
             writer: BufWriter::new(file),
         })
     }
-    // pub fn update_key(&mut self, _key: &str, _new_value: &str) -> PyResult<Option<usize>> {
-    //     loop {
-    //         // Fill the buffer (immutable borrow)
-    //         let data_len;
-    //         {
-    //             let data = self.reader.fill_buf()?;
-    //
-    //             if data.is_empty() {
-    //                 break;
-    //             }
-    //             // Get the length of the data to consume
-    //             data_len = data.len();
-    //             // TODO: All processing needs to go in here
-    //         } // Immutable borrow ends here (data goes out of scope)
-    //
-    //         // Now it's safe to mutably borrow self.reader for consuming
-    //         self.reader.consume(data_len);
-    //     }
-    //     Ok(Some(2))
-    // }
 }
 
 #[pyfunction]
