@@ -16,20 +16,44 @@ use std::io::BufWriter;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
+use std::str::FromStr;
 use uuid::Uuid;
 
 trait Query: Debug {
     fn execute(&self, collection: &Map<String, Value>) -> bool;
 }
 
-trait QueryOperators: Debug {
-    fn execute(&self, v1: Value, v2: Value) -> bool;
+#[derive(Debug)]
+enum QueryOperator {
+    Equal,
+    NotEqual,
+    GreaterThan,
+    GreaterThanEqual,
+    LessThan,
+    LessThanEqual,
+}
+
+impl FromStr for QueryOperator {
+    type Err = ();
+
+    fn from_str(query_op: &str) -> Result<QueryOperator, Self::Err> {
+        match query_op {
+            "$eq" => Ok(QueryOperator::Equal),
+            "$ne" => Ok(QueryOperator::NotEqual),
+            "$gt" => Ok(QueryOperator::GreaterThan),
+            "$gte" => Ok(QueryOperator::GreaterThanEqual),
+            "$lt" => Ok(QueryOperator::LessThan),
+            "$lte" => Ok(QueryOperator::LessThanEqual),
+            _ => Err(()),
+        }
+    }
 }
 
 #[derive(Debug)]
 struct EqualQuery {
     fields: Vec<String>,
     value: Value,
+    operator: QueryOperator,
 }
 
 impl Query for EqualQuery {
@@ -69,9 +93,21 @@ impl QueryEngine {
         let queries: Vec<Box<dyn Query>> = unparsed_query
             .into_iter()
             .map(|(key, sub_query)| {
-                let mut fields = Vec::new();
+                let mut fields: Vec<String> = Vec::new();
                 let value = _parse_query(sub_query, key, &mut fields);
-                return Box::new(EqualQuery { fields, value }) as Box<dyn Query>;
+                let mut query_op = QueryOperator::Equal;
+                if fields.last().unwrap().chars().next() == Some('$') {
+                    let query_op_str = fields.pop().unwrap();
+                    // TODO: Error should be a python error
+                    query_op = QueryOperator::from_str(&query_op_str)
+                        .expect(&format!("Unknown query operator found: {}", query_op_str));
+                }
+                println!("Found operator: {:?}", query_op);
+                return Box::new(EqualQuery {
+                    fields,
+                    value,
+                    operator: query_op,
+                }) as Box<dyn Query>;
             })
             .collect();
         QueryEngine { queries }
@@ -83,7 +119,7 @@ impl QueryEngine {
 
 pub fn _parse_query(sub_query: &Value, key: &str, fields: &mut Vec<String>) -> Value {
     fields.push(key.to_string());
-    let value: Value = match sub_query {
+    let value = match sub_query {
         Value::Object(map) => map
             .into_iter()
             .find_map(|(key, val)| return Some(_parse_query(val, key, fields)))
@@ -93,6 +129,7 @@ pub fn _parse_query(sub_query: &Value, key: &str, fields: &mut Vec<String>) -> V
         Value::String(s) => Value::String(s.to_string()),
         _ => panic!("Not Valid query"),
     };
+
     return value;
 }
 
