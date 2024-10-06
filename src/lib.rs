@@ -5,7 +5,7 @@ use pyo3::types::PyDict;
 use pyo3::PyErr;
 use pyo3::PyObject;
 use pythonize::{depythonize, pythonize};
-use serde_json::{to_vec, Map, Value};
+use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::fs;
@@ -13,24 +13,20 @@ use std::fs::File;
 use std::fs::OpenOptions;
 use std::fs::{read, read_to_string, rename};
 use std::io::BufWriter;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufReader, Write};
 use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
 use std::str::FromStr;
 use uuid::Uuid;
 
-trait Query: Debug {
-    fn execute(&self, collection: &Map<String, Value>) -> bool;
-}
-
 #[derive(Debug)]
 enum QueryOperator {
     Equal,
     NotEqual,
-    GreaterThan,
-    GreaterThanEqual,
-    LessThan,
-    LessThanEqual,
+    // GreaterThan,
+    // GreaterThanEqual,
+    // LessThan,
+    // LessThanEqual,
 }
 
 impl FromStr for QueryOperator {
@@ -40,23 +36,23 @@ impl FromStr for QueryOperator {
         match query_op {
             "$eq" => Ok(QueryOperator::Equal),
             "$ne" => Ok(QueryOperator::NotEqual),
-            "$gt" => Ok(QueryOperator::GreaterThan),
-            "$gte" => Ok(QueryOperator::GreaterThanEqual),
-            "$lt" => Ok(QueryOperator::LessThan),
-            "$lte" => Ok(QueryOperator::LessThanEqual),
+            // "$gt" => Ok(QueryOperator::GreaterThan),
+            // "$gte" => Ok(QueryOperator::GreaterThanEqual),
+            // "$lt" => Ok(QueryOperator::LessThan),
+            // "$lte" => Ok(QueryOperator::LessThanEqual),
             _ => Err(()),
         }
     }
 }
 
 #[derive(Debug)]
-struct EqualQuery {
+struct Query {
     fields: Vec<String>,
     value: Value,
     operator: QueryOperator,
 }
 
-impl Query for EqualQuery {
+impl Query {
     fn execute(&self, collection: &Map<String, Value>) -> bool {
         let mut current_value = collection;
 
@@ -72,8 +68,22 @@ impl Query for EqualQuery {
         }
         let last_key = &self.fields[self.fields.len() - 1];
         match current_value.get(last_key) {
-            Some(value) => value == &self.value,
+            Some(value) => self._execute_operator(value),
             None => false,
+        }
+    }
+
+    fn _execute_operator(&self, last_value: &Value) -> bool {
+        println!("Operator {:?}", self.operator);
+        println!("Value is: {:?}", &self.value);
+        println!("Last Value is: {:?}", last_value);
+        match self.operator {
+            QueryOperator::Equal => &self.value == last_value,
+            QueryOperator::NotEqual => &self.value != last_value,
+            // QueryOperator::LessThan => &self.value < last_value,
+            // QueryOperator::GreaterThan => &self.value > last_value,
+            // QueryOperator::LessThanEqual => &self.value <= last_value,
+            // QueryOperator::GreaterThanEqual => &self.value >= last_value
         }
     }
 }
@@ -85,35 +95,44 @@ enum QueryEngineError {
 
 #[derive(Debug)]
 struct QueryEngine {
-    queries: Vec<Box<dyn Query>>,
+    queries: Vec<Query>,
 }
 
 impl QueryEngine {
     pub fn new(unparsed_query: &Map<String, Value>) -> Self {
-        let queries: Vec<Box<dyn Query>> = unparsed_query
+        let queries: Vec<Query> = unparsed_query
             .into_iter()
             .map(|(key, sub_query)| {
                 let mut fields: Vec<String> = Vec::new();
                 let value = _parse_query(sub_query, key, &mut fields);
+
                 let mut query_op = QueryOperator::Equal;
                 if fields.last().unwrap().chars().next() == Some('$') {
                     let query_op_str = fields.pop().unwrap();
                     // TODO: Error should be a python error
                     query_op = QueryOperator::from_str(&query_op_str)
                         .expect(&format!("Unknown query operator found: {}", query_op_str));
+                    println!("Found operator: {:?}", query_op);
                 }
-                println!("Found operator: {:?}", query_op);
-                return Box::new(EqualQuery {
+                return Query {
                     fields,
                     value,
                     operator: query_op,
-                }) as Box<dyn Query>;
+                };
             })
             .collect();
         QueryEngine { queries }
     }
     fn execute(&self, collection: &Map<String, Value>) -> bool {
-        self.queries.iter().all(|q| q.execute(collection))
+        let query_iter = self.queries.iter();
+        for q in query_iter {
+            let query_result = q.execute(collection);
+            if !query_result {
+                return false;
+            }
+        }
+        return true;
+
     }
 }
 
@@ -325,6 +344,7 @@ impl Bison {
         };
         let query_object: &Map<String, Value> = query.as_object().unwrap();
         let query_engine = QueryEngine::new(query_object);
+        println!("Found queries: {:?}", query_engine.queries);
         // execute queries and return collections
         let found_collections: Vec<Value> = collection
             .into_iter()
