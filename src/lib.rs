@@ -12,6 +12,7 @@ use std::fs;
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::fs::{read, read_to_string, rename};
+use std::io;
 use std::io::BufWriter;
 use std::io::{BufReader, Write};
 use std::os::unix::fs::FileExt;
@@ -74,9 +75,6 @@ impl Query {
     }
 
     fn _execute_operator(&self, last_value: &Value) -> bool {
-        println!("Operator {:?}", self.operator);
-        println!("Value is: {:?}", &self.value);
-        println!("Last Value is: {:?}", last_value);
         match self.operator {
             QueryOperator::Equal => &self.value == last_value,
             QueryOperator::NotEqual => &self.value != last_value,
@@ -100,12 +98,21 @@ struct QueryEngine {
 
 impl QueryEngine {
     pub fn new(unparsed_query: &Map<String, Value>) -> Self {
+        // Compile an unparsed query into a list of queries.
+        //
+        // # Examples
+        //
+        // let query_engine = QueryEngine({"a": 10}) // Query to search for a = 10
+        // let query_engine = QueryEngine({"a": {"eq": 10}}) // Equivalent query
+        // let query_engine = QueryEgine({"a": {"b": 100}}) // Nested query
+        //
         let queries: Vec<Query> = unparsed_query
             .into_iter()
             .map(|(key, sub_query)| {
                 let mut fields: Vec<String> = Vec::new();
                 let value = _parse_query(sub_query, key, &mut fields);
-
+                // if no '$' operator is found, assume it is an EqualOperator
+                // For example: {"a": 10} => a == 10
                 let mut query_op = QueryOperator::Equal;
                 if fields.last().unwrap().chars().next() == Some('$') {
                     let query_op_str = fields.pop().unwrap();
@@ -132,11 +139,15 @@ impl QueryEngine {
             }
         }
         return true;
-
     }
 }
 
 pub fn _parse_query(sub_query: &Value, key: &str, fields: &mut Vec<String>) -> Value {
+    /*
+     * Parses a query recursively. It extracts the fields and value involved in a query.
+     * When there is a nested query like {"a": {"b": 10} } it will extract the fields
+     * ["a", "b"] to be able to follow the collection and return the value (10).
+     */
     fields.push(key.to_string());
     let value = match sub_query {
         Value::Object(map) => map
@@ -163,7 +174,6 @@ pub fn extract_collection(file: File, collection_name: String) -> Result<Vec<Val
     let collection = parsed
         .as_object()
         .ok_or_else(|| PyErr::new::<PyValueError, _>("Error in collection deserialization"))?;
-
     // Get the collection array from the object
     let collection_array = collection
         .get(&collection_name)
@@ -229,14 +239,14 @@ impl Bison {
     ) -> PyResult<()> {
         let path = self.get_collection_path(&collection_name);
         let temp_path = format!("{}.tmp", &collection_name); // Temporary file
-
         let file_result = OpenOptions::new().read(true).open(&path);
 
         let file = match file_result {
             Ok(file) => file,
             Err(err) => {
                 return Err(PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
-                    "Problem accessing collection: {err:?}"
+                    "Error opening collection '{}': {}",
+                    collection_name, err
                 )));
             }
         };
@@ -304,14 +314,14 @@ impl Bison {
         // 1) If not query return all elements in collection
 
         let path = self.get_collection_path(&collection_name);
-
         let file_result = OpenOptions::new().read(true).open(&path);
 
         let file = match file_result {
             Ok(file) => file,
             Err(err) => {
                 return Err(PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
-                    "Problem accessing collection: {err:?}"
+                    "Error opening collection '{}': {}",
+                    collection_name, err
                 )));
             }
         };
@@ -381,6 +391,39 @@ impl Bison {
         //    is 1 field is shown
 
         // 4)
+    }
+
+    pub fn get_collection_names(&self) -> PyResult<Vec<String>> {
+        let entries = fs::read_dir(self.base_path.as_path())?
+            .map(|res| {
+                res.map(|e| {
+                    e.path()
+                        .file_name()
+                        .unwrap()
+                        .to_os_string()
+                        .into_string()
+                        .unwrap()
+                })
+            })
+            .collect::<Result<Vec<_>, io::Error>>()?;
+
+        Ok(entries)
+    }
+
+    pub fn drop_collection(&mut self, collection_name: String) -> PyResult<()> {
+        let path = self.get_collection_path(&collection_name);
+        let _ = fs::remove_file(path);
+        Ok(())
+    }
+
+    pub fn drop_all(&mut self) -> PyResult<()> {
+        let _ = self
+            .get_collection_names()
+            .unwrap()
+            .into_iter()
+            .map(|collection_name| self.drop_collection(collection_name))
+            .collect::<Result<(), PyErr>>();
+        Ok(())
     }
 }
 
