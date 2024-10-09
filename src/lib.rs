@@ -194,7 +194,7 @@ impl Bison {
         path
     }
 
-    fn read_document(document_name: String) -> Result<Map<String, Value>, PyErr> {
+    fn read_document(document_name: String) -> Result<Value, PyErr> {
         let file_path = PathBuf::from(document_name.clone());
         let file_result = OpenOptions::new().read(true).open(&file_path);
 
@@ -212,33 +212,41 @@ impl Bison {
         let json_value: Value = serde_json::from_reader(reader)
             .map_err(|_| PyErr::new::<PyValueError, _>("Error deserializing JSON"))?;
         // TODO(manuel): Better way than cloning here?
-        Ok(json_value.as_object().unwrap().to_owned())
+        // Ok(json_value.as_object().unwrap().to_owned())
+        Ok(json_value)
     }
     fn insert_in_collection(
         &mut self,
         collection_name: &str,
         insert_value: Value,
     ) -> Result<(), PyErr> {
-
         // Create collection if it does not exist
-        if !self.collections().unwrap().contains(&collection_name.to_string()) {
+        if !self
+            .collections()
+            .unwrap()
+            .contains(&collection_name.to_string())
+        {
             let _ = self.create_collection(collection_name);
         }
         let path = self.get_collection_path(&collection_name);
         // Read the existing collection/document
-        let mut document: Map<String, Value> = Bison::read_document(path.to_str().unwrap().to_string())?;
+        let mut document: Map<String, Value> =
+            Bison::read_document(path.to_str().unwrap().to_string())?
+                .as_object()
+                .unwrap()
+                .to_owned();
 
         let temp_path = format!("{}.tmp", &collection_name); // Temporary file
-        // TODO(manuel): Do you even need this?
-        // let uuid = Uuid::new_v4();
-        // insert_value.insert("_id".to_string(), Value::String(uuid.to_string()));
+                                                             // TODO(manuel): Do you even need this?
+                                                             // let uuid = Uuid::new_v4();
+                                                             // insert_value.insert("_id".to_string(), Value::String(uuid.to_string()));
 
         if let Some(Value::Array(arr)) = document.get_mut(collection_name) {
-            if let Some(insert_value_arr) =  insert_value.as_array() {
+            // Extend the collection if the value to insert is an array
+            if let Some(insert_value_arr) = insert_value.as_array() {
                 arr.extend_from_slice(insert_value_arr)
             } else {
                 arr.push(insert_value);
-
             }
         }
 
@@ -296,7 +304,10 @@ impl Bison {
         match document_name {
             Some(document_name) => {
                 // Initializes a database from an existing document
-                let document: Map<String, Value> = Bison::read_document(document_name)?;
+                let document: Map<String, Value> = Bison::read_document(document_name)?
+                    .as_object()
+                    .unwrap()
+                    .to_owned();
                 for (key, value) in document {
                     db.insert_in_collection(&key, value)?
                 }
@@ -321,29 +332,42 @@ impl Bison {
         file.write_all(json_data.as_bytes())?;
         let collection =
             Collection::new(path.to_str().unwrap_or("Error unwrapping collection name"))?;
-        self.collections.insert(collection_name.to_string(), collection);
+        self.collections
+            .insert(collection_name.to_string(), collection);
         Ok(())
     }
 
     pub fn insert(
         &mut self,
         collection_name: String,
-        _document: &Bound<'_, PyDict>,
+        document: &Bound<'_, PyDict>,
     ) -> PyResult<()> {
-
-        let obj: Value = depythonize(&_document).unwrap();
+        let obj: Value = depythonize(&document).unwrap();
         self.insert_in_collection(&collection_name, obj)
     }
 
     pub fn insert_many(
         &mut self,
         collection_name: String,
-        _document: &Bound<'_, PyList>,
+        documents: &Bound<'_, PyList>,
     ) -> PyResult<()> {
-
-        let obj: Value = depythonize(&_document).unwrap();
+        let obj: Value = depythonize(&documents).unwrap();
         self.insert_in_collection(&collection_name, obj)
     }
+
+    pub fn insert_many_from_document(&mut self, collection_name: String,  document_name: String) -> PyResult<()> {
+        // Insert many from json (array document)
+        // The top most object in the json document
+        // should be an array
+        let values: Value = Bison::read_document(document_name)?;
+        match values.as_array() {
+            // Here we do not insert the array as we are making that distinction in
+            // Bison::insert_in_collection already
+            Some(_) => self.insert_in_collection(&collection_name, values),
+            None => return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>("Document is not an array"))
+        }
+    }
+
     #[pyo3(signature = (collection_name, maybe_query = None))]
     pub fn find(
         &mut self,
