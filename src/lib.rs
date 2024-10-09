@@ -86,11 +86,6 @@ impl Query {
     }
 }
 
-#[derive(Debug, Clone)]
-enum QueryEngineError {
-    InvalidQueryFormat,
-}
-
 #[derive(Debug)]
 struct QueryEngine {
     queries: Vec<Query>,
@@ -199,21 +194,63 @@ impl Bison {
         path.set_extension("json");
         path
     }
+
+    fn get_top_level_keys(document_name: String) -> Result<Vec<String>, PyErr> {
+        let file_path = PathBuf::from(document_name.clone());
+        let file_result = OpenOptions::new().read(true).open(&file_path);
+
+        let file = match file_result {
+            Ok(file) => file,
+            Err(_err) => {
+                return Err(PyErr::new::<pyo3::exceptions::PyIOError, _>(
+                    "Error opening document",
+                ));
+            }
+        };
+        let reader = BufReader::new(file);
+
+        // Parse the file into a serde_json::Value
+        let json_value: Value = serde_json::from_reader(reader)
+            .map_err(|_| PyErr::new::<PyValueError, _>("Error deserializing JSON"))?;
+
+        // Get the top-level keys if the JSON is an object
+        if let Value::Object(map) = json_value {
+            let keys = map.keys().cloned().collect();
+            Ok(keys)
+        } else {
+            Err(PyErr::new::<PyValueError, _>(
+                "The JSON root is not an object",
+            ))
+        }
+    }
 }
+
 #[pymethods]
 impl Bison {
     #[new]
-    pub fn new(name: String) -> PyResult<Self> {
+    #[pyo3(signature = (name, document_name = None))]
+    pub fn new(name: String, document_name: Option<String>) -> PyResult<Self> {
         let base_path = PathBuf::from(name.clone());
         if !base_path.exists() {
             let _ = fs::create_dir(&base_path);
         }
-        // TODO: go check in storage which tables are there
+
         let collections = HashMap::new();
-        Ok(Bison {
-            base_path,
-            collections,
-        })
+        let mut db = Bison { base_path,
+                    collections,
+                };
+        match document_name {
+            Some(document_name) => {
+                // Initializes a database from an existing document
+                let collection_names: Vec<String> = Bison::get_top_level_keys(document_name)?;
+                let _ = collection_names.into_iter().map(|collection_name| db.create_collection(collection_name)).collect::<Vec<_>>();
+                Ok(db)
+            }
+            None => {
+                // TODO: go check in storage which tables are there
+                Ok(db)
+            }
+        }
     }
     pub fn create_collection(&mut self, collection_name: String) -> PyResult<()> {
         let path = self.get_collection_path(&collection_name);
@@ -306,6 +343,7 @@ impl Bison {
             ))),
         }
     }
+    #[pyo3(signature = (collection_name, maybe_query = None))]
     pub fn find(
         &mut self,
         collection_name: String,
@@ -354,7 +392,6 @@ impl Bison {
         };
         let query_object: &Map<String, Value> = query.as_object().unwrap();
         let query_engine = QueryEngine::new(query_object);
-        println!("Found queries: {:?}", query_engine.queries);
         // execute queries and return collections
         let found_collections: Vec<Value> = collection
             .into_iter()
@@ -393,12 +430,13 @@ impl Bison {
         // 4)
     }
 
-    pub fn get_collection_names(&self) -> PyResult<Vec<String>> {
+    pub fn collections(&self) -> PyResult<Vec<String>> {
+        // Get collection names
         let entries = fs::read_dir(self.base_path.as_path())?
             .map(|res| {
                 res.map(|e| {
                     e.path()
-                        .file_name()
+                        .file_stem()
                         .unwrap()
                         .to_os_string()
                         .into_string()
@@ -418,11 +456,12 @@ impl Bison {
 
     pub fn drop_all(&mut self) -> PyResult<()> {
         let _ = self
-            .get_collection_names()
+            .collections()
             .unwrap()
             .into_iter()
             .map(|collection_name| self.drop_collection(collection_name))
             .collect::<Result<(), PyErr>>();
+        let _ = fs::remove_dir(self.base_path.clone());
         Ok(())
     }
 }
