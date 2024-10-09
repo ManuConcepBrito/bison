@@ -19,7 +19,6 @@ def test_simple_query(db: Bison, insert: Dict[str, Any], query: Dict[str, Any]) 
     assert len(query_result) == 1
     # pop id
     query_result = query_result[0]
-    query_result.pop("_id")
     assert query_result == insert
 
 

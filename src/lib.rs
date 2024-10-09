@@ -1,7 +1,7 @@
 use jiter::{map_json_error, PartialMode, PythonParse, StringCacheMode};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyList};
 use pyo3::PyErr;
 use pyo3::PyObject;
 use pythonize::{depythonize, pythonize};
@@ -18,7 +18,6 @@ use std::io::{BufReader, Write};
 use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
 use std::str::FromStr;
-use uuid::Uuid;
 
 #[derive(Debug)]
 enum QueryOperator {
@@ -195,7 +194,7 @@ impl Bison {
         path
     }
 
-    fn get_top_level_keys(document_name: String) -> Result<Vec<String>, PyErr> {
+    fn read_document(document_name: String) -> Result<Map<String, Value>, PyErr> {
         let file_path = PathBuf::from(document_name.clone());
         let file_result = OpenOptions::new().read(true).open(&file_path);
 
@@ -212,101 +211,35 @@ impl Bison {
         // Parse the file into a serde_json::Value
         let json_value: Value = serde_json::from_reader(reader)
             .map_err(|_| PyErr::new::<PyValueError, _>("Error deserializing JSON"))?;
-
-        // Get the top-level keys if the JSON is an object
-        if let Value::Object(map) = json_value {
-            let keys = map.keys().cloned().collect();
-            Ok(keys)
-        } else {
-            Err(PyErr::new::<PyValueError, _>(
-                "The JSON root is not an object",
-            ))
-        }
+        // TODO(manuel): Better way than cloning here?
+        Ok(json_value.as_object().unwrap().to_owned())
     }
-}
-
-#[pymethods]
-impl Bison {
-    #[new]
-    #[pyo3(signature = (name, document_name = None))]
-    pub fn new(name: String, document_name: Option<String>) -> PyResult<Self> {
-        let base_path = PathBuf::from(name.clone());
-        if !base_path.exists() {
-            let _ = fs::create_dir(&base_path);
-        }
-
-        let collections = HashMap::new();
-        let mut db = Bison { base_path,
-                    collections,
-                };
-        match document_name {
-            Some(document_name) => {
-                // Initializes a database from an existing document
-                let collection_names: Vec<String> = Bison::get_top_level_keys(document_name)?;
-                let _ = collection_names.into_iter().map(|collection_name| db.create_collection(collection_name)).collect::<Vec<_>>();
-                Ok(db)
-            }
-            None => {
-                // TODO: go check in storage which tables are there
-                Ok(db)
-            }
-        }
-    }
-    pub fn create_collection(&mut self, collection_name: String) -> PyResult<()> {
-        let path = self.get_collection_path(&collection_name);
-        if path.exists() {
-            return Ok(());
-        }
-        // Create a file to save the JSON data
-        let mut file = File::create(&path)?;
-
-        // Write the JSON data to the file
-        let json_data = format!("{{ \"{}\":[] }}", collection_name);
-        file.write_all(json_data.as_bytes())?;
-        let collection =
-            Collection::new(path.to_str().unwrap_or("Error unwrapping collection name"))?;
-        self.collections.insert(collection_name.clone(), collection);
-        Ok(())
-    }
-
-    pub fn insert(
+    fn insert_in_collection(
         &mut self,
-        collection_name: String,
-        _document: &Bound<'_, PyDict>,
-    ) -> PyResult<()> {
+        collection_name: &str,
+        insert_value: Value,
+    ) -> Result<(), PyErr> {
+
+        // Create collection if it does not exist
+        if !self.collections().unwrap().contains(&collection_name.to_string()) {
+            let _ = self.create_collection(collection_name);
+        }
         let path = self.get_collection_path(&collection_name);
+        // Read the existing collection/document
+        let mut document: Map<String, Value> = Bison::read_document(path.to_str().unwrap().to_string())?;
+
         let temp_path = format!("{}.tmp", &collection_name); // Temporary file
-        let file_result = OpenOptions::new().read(true).open(&path);
+        // TODO(manuel): Do you even need this?
+        // let uuid = Uuid::new_v4();
+        // insert_value.insert("_id".to_string(), Value::String(uuid.to_string()));
 
-        let file = match file_result {
-            Ok(file) => file,
-            Err(err) => {
-                return Err(PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
-                    "Error opening collection '{}': {}",
-                    collection_name, err
-                )));
+        if let Some(Value::Array(arr)) = document.get_mut(collection_name) {
+            if let Some(insert_value_arr) =  insert_value.as_array() {
+                arr.extend_from_slice(insert_value_arr)
+            } else {
+                arr.push(insert_value);
+
             }
-        };
-
-        let reader = BufReader::new(file);
-        let mut parsed: Value = match serde_json::from_reader(reader) {
-            Ok(data) => data,
-            Err(_) => {
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                    "Error deserializing JSON",
-                ));
-            }
-        };
-
-        let mut obj: Value = depythonize(&_document).unwrap();
-        let uuid = Uuid::new_v4();
-        parsed.as_object_mut().unwrap();
-        obj.as_object_mut()
-            .unwrap()
-            .insert("_id".to_string(), Value::String(uuid.to_string()));
-
-        if let Some(Value::Array(arr)) = parsed.get_mut(collection_name) {
-            arr.push(obj);
         }
 
         let temp_file_result = OpenOptions::new()
@@ -325,7 +258,7 @@ impl Bison {
         };
 
         let mut writer = BufWriter::new(temp_file);
-        match serde_json::to_writer(&mut writer, &parsed) {
+        match serde_json::to_writer(&mut writer, &document) {
             Ok(_) => {
                 writer.flush().unwrap();
             }
@@ -342,6 +275,74 @@ impl Bison {
                 "Error renaming file: {err:?}"
             ))),
         }
+    }
+}
+
+#[pymethods]
+impl Bison {
+    #[new]
+    #[pyo3(signature = (name, document_name = None))]
+    pub fn new(name: String, document_name: Option<String>) -> PyResult<Self> {
+        let base_path = PathBuf::from(name.clone());
+        if !base_path.exists() {
+            let _ = fs::create_dir(&base_path);
+        }
+
+        let collections = HashMap::new();
+        let mut db = Bison {
+            base_path,
+            collections,
+        };
+        match document_name {
+            Some(document_name) => {
+                // Initializes a database from an existing document
+                let document: Map<String, Value> = Bison::read_document(document_name)?;
+                for (key, value) in document {
+                    db.insert_in_collection(&key, value)?
+                }
+                Ok(db)
+            }
+            None => {
+                // TODO: go check in storage which tables are there
+                Ok(db)
+            }
+        }
+    }
+    pub fn create_collection(&mut self, collection_name: &str) -> PyResult<()> {
+        let path = self.get_collection_path(&collection_name);
+        if path.exists() {
+            return Ok(());
+        }
+        // Create a file to save the JSON data
+        let mut file = File::create(&path)?;
+
+        // Write the JSON data to the file
+        let json_data = format!("{{ \"{}\":[] }}", collection_name);
+        file.write_all(json_data.as_bytes())?;
+        let collection =
+            Collection::new(path.to_str().unwrap_or("Error unwrapping collection name"))?;
+        self.collections.insert(collection_name.to_string(), collection);
+        Ok(())
+    }
+
+    pub fn insert(
+        &mut self,
+        collection_name: String,
+        _document: &Bound<'_, PyDict>,
+    ) -> PyResult<()> {
+
+        let obj: Value = depythonize(&_document).unwrap();
+        self.insert_in_collection(&collection_name, obj)
+    }
+
+    pub fn insert_many(
+        &mut self,
+        collection_name: String,
+        _document: &Bound<'_, PyList>,
+    ) -> PyResult<()> {
+
+        let obj: Value = depythonize(&_document).unwrap();
+        self.insert_in_collection(&collection_name, obj)
     }
     #[pyo3(signature = (collection_name, maybe_query = None))]
     pub fn find(
