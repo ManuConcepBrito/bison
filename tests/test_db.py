@@ -44,3 +44,11 @@ def test_insert_many_from_document(db: Bison, tmp_path: Path) -> None:
         json.dump(json_data, f)
     db.insert_many_from_document(collection_name, document_path)
     assert len(db.find(collection_name, {})) == len(json_data)
+
+
+def test_remove_collection(db: Bison) -> None:
+    db.drop_collection("test")
+
+    collections = db.collections()
+
+    assert "test" not in collections

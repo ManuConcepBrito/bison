@@ -5,9 +5,9 @@ use pyo3::types::{PyDict, PyList};
 use pyo3::PyErr;
 use pyo3::PyObject;
 use pythonize::{depythonize, pythonize};
+use query::{QueryOperator, UpdateOperator};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
-use std::fmt::Debug;
 use std::fs;
 use std::fs::File;
 use std::fs::OpenOptions;
@@ -17,175 +17,17 @@ use std::io::BufWriter;
 use std::io::{BufReader, Write};
 use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
-use std::str::FromStr;
 
-#[derive(Debug)]
-enum QueryOperator {
-    Equal,
-    NotEqual,
-    // GreaterThan,
-    // GreaterThanEqual,
-    // LessThan,
-    // LessThanEqual,
-}
-
-impl FromStr for QueryOperator {
-    type Err = ();
-
-    fn from_str(query_op: &str) -> Result<QueryOperator, Self::Err> {
-        match query_op {
-            "$eq" => Ok(QueryOperator::Equal),
-            "$ne" => Ok(QueryOperator::NotEqual),
-            // "$gt" => Ok(QueryOperator::GreaterThan),
-            // "$gte" => Ok(QueryOperator::GreaterThanEqual),
-            // "$lt" => Ok(QueryOperator::LessThan),
-            // "$lte" => Ok(QueryOperator::LessThanEqual),
-            _ => Err(()),
-        }
-    }
-}
-
-#[derive(Debug)]
-struct Query {
-    fields: Vec<String>,
-    value: Value,
-    operator: QueryOperator,
-}
-
-impl Query {
-    fn execute(&self, collection: &Map<String, Value>) -> bool {
-        let mut current_value = collection;
-
-        for key in &self.fields[..self.fields.len() - 1] {
-            match current_value.get(key) {
-                Some(Value::Object(map)) => {
-                    current_value = map;
-                }
-                _ => {
-                    return false;
-                }
-            }
-        }
-        let last_key = &self.fields[self.fields.len() - 1];
-        match current_value.get(last_key) {
-            Some(value) => self._execute_operator(value),
-            None => false,
-        }
-    }
-
-    fn _execute_operator(&self, last_value: &Value) -> bool {
-        match self.operator {
-            QueryOperator::Equal => &self.value == last_value,
-            QueryOperator::NotEqual => &self.value != last_value,
-            // QueryOperator::LessThan => &self.value < last_value,
-            // QueryOperator::GreaterThan => &self.value > last_value,
-            // QueryOperator::LessThanEqual => &self.value <= last_value,
-            // QueryOperator::GreaterThanEqual => &self.value >= last_value
-        }
-    }
-}
-
-#[derive(Debug)]
-struct QueryEngine {
-    queries: Vec<Query>,
-}
-
-impl QueryEngine {
-    pub fn new(unparsed_query: &Map<String, Value>) -> Self {
-        // Compile an unparsed query into a list of queries.
-        //
-        // # Examples
-        //
-        // let query_engine = QueryEngine({"a": 10}) // Query to search for a = 10
-        // let query_engine = QueryEngine({"a": {"eq": 10}}) // Equivalent query
-        // let query_engine = QueryEgine({"a": {"b": 100}}) // Nested query
-        //
-        let queries: Vec<Query> = unparsed_query
-            .into_iter()
-            .map(|(key, sub_query)| {
-                let mut fields: Vec<String> = Vec::new();
-                let value = _parse_query(sub_query, key, &mut fields);
-                // if no '$' operator is found, assume it is an EqualOperator
-                // For example: {"a": 10} => a == 10
-                let mut query_op = QueryOperator::Equal;
-                if fields.last().unwrap().chars().next() == Some('$') {
-                    let query_op_str = fields.pop().unwrap();
-                    // TODO: Error should be a python error
-                    query_op = QueryOperator::from_str(&query_op_str)
-                        .expect(&format!("Unknown query operator found: {}", query_op_str));
-                    println!("Found operator: {:?}", query_op);
-                }
-                return Query {
-                    fields,
-                    value,
-                    operator: query_op,
-                };
-            })
-            .collect();
-        QueryEngine { queries }
-    }
-    fn execute(&self, collection: &Map<String, Value>) -> bool {
-        let query_iter = self.queries.iter();
-        for q in query_iter {
-            let query_result = q.execute(collection);
-            if !query_result {
-                return false;
-            }
-        }
-        return true;
-    }
-}
-
-pub fn _parse_query(sub_query: &Value, key: &str, fields: &mut Vec<String>) -> Value {
-    /*
-     * Parses a query recursively. It extracts the fields and value involved in a query.
-     * When there is a nested query like {"a": {"b": 10} } it will extract the fields
-     * ["a", "b"] to be able to follow the collection and return the value (10).
-     */
-    fields.push(key.to_string());
-    let value = match sub_query {
-        Value::Object(map) => map
-            .into_iter()
-            .find_map(|(key, val)| return Some(_parse_query(val, key, fields)))
-            .expect("Error while parsing query"),
-        Value::Bool(b) => Value::Bool(*b),
-        Value::Number(n) => Value::Number(n.clone()),
-        Value::String(s) => Value::String(s.to_string()),
-        _ => panic!("Not Valid query"),
-    };
-
-    return value;
-}
-
-pub fn extract_collection(file: File, collection_name: String) -> Result<Vec<Value>, PyErr> {
-    let reader = BufReader::new(file);
-
-    // Deserialize JSON from the reader
-    let parsed: Value = serde_json::from_reader(reader)
-        .map_err(|_| PyErr::new::<PyValueError, _>("Error deserializing JSON"))?;
-
-    // Ensure the parsed JSON is an object and get a reference to it
-    let collection = parsed
-        .as_object()
-        .ok_or_else(|| PyErr::new::<PyValueError, _>("Error in collection deserialization"))?;
-    // Get the collection array from the object
-    let collection_array = collection
-        .get(&collection_name)
-        .and_then(|v| v.as_array())
-        .ok_or_else(|| {
-            PyErr::new::<PyValueError, _>(
-                "Collection does not contain collection key or is not an array",
-            )
-        })?;
-    Ok(collection_array.to_vec())
-}
+mod query;
 
 #[pyclass]
 pub struct Bison {
     base_path: PathBuf,
     collections: HashMap<String, Collection>,
 }
-
+// TODO(manuel): Implement update operations
+// delete, increment, decrement, add, subtract, set
+// for reference: https://github.com/msiemens/tinydb/blob/master/tests/test_operations.py
 impl Bison {
     fn get_collection_path(&self, collection_name: &str) -> PathBuf {
         let mut path = self.base_path.clone();
@@ -214,6 +56,26 @@ impl Bison {
         // TODO(manuel): Better way than cloning here?
         // Ok(json_value.as_object().unwrap().to_owned())
         Ok(json_value)
+    }
+
+    pub fn extract_collection(
+        json_value: Value,
+        collection_name: String,
+    ) -> Result<Vec<Value>, PyErr> {
+        // Ensure the parsed JSON is an object and get a reference to it
+        let collection = json_value
+            .as_object()
+            .ok_or_else(|| PyErr::new::<PyValueError, _>("Error in collection deserialization"))?;
+        // Get the collection array from the object
+        let collection_array = collection
+            .get(&collection_name)
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| {
+                PyErr::new::<PyValueError, _>(
+                    "Collection does not contain collection key or is not an array",
+                )
+            })?;
+        Ok(collection_array.to_vec())
     }
     fn insert_in_collection(
         &mut self,
@@ -283,6 +145,70 @@ impl Bison {
                 "Error renaming file: {err:?}"
             ))),
         }
+    }
+
+    fn _find(
+        &mut self,
+        collection_values: Vec<Value>,
+        maybe_query: Option<&Bound<'_, PyDict>>,
+    ) -> Result<Vec<Value>, PyErr> {
+        // Inner method that returns Vec<Value> instead
+        // of a python dict
+        let query: Value = match maybe_query {
+            Some(q) => depythonize(q).unwrap(),
+            None => {
+                // If there is no query, return all the values
+                return Ok(collection_values);
+            }
+        };
+        let query_object: &Map<String, Value> = query.as_object().unwrap();
+        let query_engine = query::QueryEngine::<QueryOperator>::new(query_object);
+        // execute queries and return collections
+        let found_collections: Vec<Value> = collection_values
+            .into_iter()
+            .filter(|c| {
+                let c_obj = c.as_object().unwrap();
+                let result: bool = query_engine.execute(c_obj);
+                result
+            })
+            .collect();
+        Ok(found_collections)
+    }
+    fn _update(
+        &mut self,
+        mut collection_values: Vec<Value>,
+        py_update_query: &Bound<'_, PyDict>,
+        maybe_filter_query: Option<&Bound<'_, PyDict>>,
+    ) -> Result<Vec<Value>, PyErr> {
+
+        let update_query: Value = depythonize(py_update_query).unwrap();
+        let update_query_object: &Map<String, Value> = update_query.as_object().unwrap();
+        let update_query_engine = query::QueryEngine::<UpdateOperator>::new(update_query_object);
+        match maybe_filter_query {
+            Some(q) => {
+
+                let filter_query: Value = depythonize(q).unwrap();
+                let filter_query_object: &Map<String, Value> = filter_query.as_object().unwrap();
+                let filter_query_engine = query::QueryEngine::<QueryOperator>::new(filter_query_object);
+                collection_values.iter_mut().for_each(|c| {
+
+                let c_obj = c.as_object_mut().unwrap();
+                if filter_query_engine.execute(c_obj) {
+                    // Do update
+                    update_query_engine.execute(c_obj)
+                    }
+                })
+
+            },
+            None => {
+                collection_values.iter_mut().for_each(|c| {
+
+                let c_obj = c.as_object_mut().unwrap();
+                update_query_engine.execute(c_obj)
+                })
+            }
+        };
+        Ok(collection_values)
     }
 }
 
@@ -355,7 +281,11 @@ impl Bison {
         self.insert_in_collection(&collection_name, obj)
     }
 
-    pub fn insert_many_from_document(&mut self, collection_name: String,  document_name: String) -> PyResult<()> {
+    pub fn insert_many_from_document(
+        &mut self,
+        collection_name: String,
+        document_name: String,
+    ) -> PyResult<()> {
         // Insert many from json (array document)
         // The top most object in the json document
         // should be an array
@@ -364,7 +294,11 @@ impl Bison {
             // Here we do not insert the array as we are making that distinction in
             // Bison::insert_in_collection already
             Some(_) => self.insert_in_collection(&collection_name, values),
-            None => return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>("Document is not an array"))
+            None => {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    "Document is not an array",
+                ))
+            }
         }
     }
 
@@ -374,58 +308,14 @@ impl Bison {
         collection_name: String,
         maybe_query: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<PyObject> {
-        // 1) If not query return all elements in collection
-
         let path = self.get_collection_path(&collection_name);
-        let file_result = OpenOptions::new().read(true).open(&path);
+        // Raw collection is the read document {"collection_name": [{...}, {...}, etc]}
+        let raw_collection = Bison::read_document(path.to_str().unwrap().to_string()).unwrap();
+        // Collection values are the values of "collection_name"
+        let collection_values = Bison::extract_collection(raw_collection, collection_name).unwrap();
 
-        let file = match file_result {
-            Ok(file) => file,
-            Err(err) => {
-                return Err(PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
-                    "Error opening collection '{}': {}",
-                    collection_name, err
-                )));
-            }
-        };
-        let collection = extract_collection(file, collection_name).unwrap();
-        let query: Value = match maybe_query {
-            Some(q) => depythonize(q).unwrap(),
-            None => {
-                let py_collections = {
-                    let mut result: Option<PyObject> = None;
-                    let mut py_error: Option<PyErr> = None;
+        let found_collections = self._find(collection_values, maybe_query).unwrap();
 
-                    Python::with_gil(|py| {
-                        match pythonize(py, &collection) {
-                            Ok(obj) => {
-                                // Convert &PyAny to PyObject
-                                let py_obj = obj.to_object(py);
-                                result = Some(py_obj);
-                            }
-                            Err(err) => py_error = Some(err.into()),
-                        }
-                    });
-
-                    if let Some(err) = py_error {
-                        return Err(err);
-                    }
-                    result.expect("Failed to obtain PyObject")
-                };
-                return Ok(py_collections);
-            }
-        };
-        let query_object: &Map<String, Value> = query.as_object().unwrap();
-        let query_engine = QueryEngine::new(query_object);
-        // execute queries and return collections
-        let found_collections: Vec<Value> = collection
-            .into_iter()
-            .filter(|c| {
-                let c_obj = c.as_object().unwrap();
-                let result: bool = query_engine.execute(c_obj);
-                result
-            })
-            .collect();
         let py_collections = {
             let mut result: Option<PyObject> = None;
             let mut py_error: Option<PyErr> = None;
@@ -448,11 +338,48 @@ impl Bison {
         };
 
         Ok(py_collections)
+    }
 
-        // 3) support projections, specify key: 1 or 0. If value is 0 field is not shown, if value
-        //    is 1 field is shown
+    #[pyo3(signature = (collection_name, update_query, maybe_query = None))]
+    pub fn update(
+        &mut self,
+        collection_name: String,
+        update_query: &Bound<'_, PyDict>,
+        maybe_query: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<PyObject> {
+        let path = self.get_collection_path(&collection_name);
+        // Raw collection is the read document {"collection_name": [{...}, {...}, etc]}
+        let raw_collection = Bison::read_document(path.to_str().unwrap().to_string()).unwrap();
+        // Collection values are the values of "collection_name"
+        let collection_values = Bison::extract_collection(raw_collection, collection_name).unwrap();
+        println!("Before update {:?}", collection_values);
+        let updated_collections = self._update(collection_values, update_query, maybe_query).unwrap();
 
-        // 4)
+        println!("After update {:?}", updated_collections);
+
+        let py_collections = {
+            let mut result: Option<PyObject> = None;
+            let mut py_error: Option<PyErr> = None;
+
+            Python::with_gil(|py| {
+                match pythonize(py, &updated_collections) {
+                    Ok(obj) => {
+                        // Convert &PyAny to PyObject
+                        let py_obj = obj.to_object(py);
+                        result = Some(py_obj);
+                    }
+                    Err(err) => py_error = Some(err.into()),
+                }
+            });
+
+            if let Some(err) = py_error {
+                return Err(err);
+            }
+            result.expect("Failed to obtain PyObject")
+        };
+
+        Ok(py_collections)
+
     }
 
     pub fn collections(&self) -> PyResult<Vec<String>> {
