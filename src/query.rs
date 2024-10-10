@@ -1,4 +1,4 @@
-use serde_json::{Map, Value};
+use serde_json::{Map, Number, Value};
 use std::fmt::Debug;
 use std::str::FromStr;
 
@@ -15,6 +15,10 @@ pub enum QueryOperator {
 #[derive(Debug)]
 pub enum UpdateOperator {
     Set,
+    Add,
+    Substract,
+    Increment,
+    Decrement,
 }
 
 #[derive(Debug)]
@@ -51,6 +55,10 @@ impl FromStr for UpdateOperator {
     fn from_str(query_op: &str) -> Result<UpdateOperator, Self::Err> {
         match query_op {
             "$set" => Ok(UpdateOperator::Set),
+            "$add" => Ok(UpdateOperator::Add),
+            "$substract" => Ok(UpdateOperator::Substract),
+            "$inc" => Ok(UpdateOperator::Increment),
+            "$dec" => Ok(UpdateOperator::Decrement),
             // "$delete" => Ok(UpdateOperator::Delete),
             _ => Err(()),
         }
@@ -78,11 +86,6 @@ impl Query<QueryOperator> {
         }
     }
     pub fn _execute_operator(&self, last_value: &Value) -> bool {
-        println!("self.value is {:?}", &self.value);
-        println!("Are they different? {:?}", &self.value != last_value);
-        println!("last_value is {:?}", last_value);
-        println!("operator {:?}", self.operator);
-
         match self.operator {
             QueryOperator::Equal => &self.value == last_value,
             QueryOperator::NotEqual => &self.value != last_value,
@@ -95,7 +98,7 @@ impl Query<QueryOperator> {
                     return found_value.clone().as_f64() > query_value.clone().as_f64();
                 }
                 false
-            },
+            }
 
             QueryOperator::LessThan => {
                 if let (Some(query_value), Some(found_value)) =
@@ -104,7 +107,7 @@ impl Query<QueryOperator> {
                     return found_value.clone().as_f64() < query_value.clone().as_f64();
                 }
                 false
-            },
+            }
 
             QueryOperator::GreaterThanEqual => {
                 if let (Some(query_value), Some(found_value)) =
@@ -113,7 +116,7 @@ impl Query<QueryOperator> {
                     return found_value.clone().as_f64() >= query_value.clone().as_f64();
                 }
                 false
-            },
+            }
             QueryOperator::LessThanEqual => {
                 if let (Some(query_value), Some(found_value)) =
                     (self.value.as_number(), last_value.as_number())
@@ -149,7 +152,41 @@ impl Query<UpdateOperator> {
     pub fn _execute_operator(&self, last_value: &mut Value) -> bool {
         match self.operator {
             UpdateOperator::Set => *last_value = self.value.clone(),
-            // UpdateOperator::Delete => {},
+            UpdateOperator::Increment => {
+                if let Some(found_value) = last_value.as_number() {
+                    let mut numerical_value = found_value.clone().as_f64().unwrap();
+                    numerical_value += 1.0;
+                    *last_value = Number::from_f64(numerical_value).into()
+                }
+            }
+            UpdateOperator::Decrement => {
+                if let Some(found_value) = last_value.as_number() {
+                    let mut numerical_value = found_value.clone().as_f64().unwrap();
+                    numerical_value -= 1.0;
+                    *last_value = Number::from_f64(numerical_value).into()
+                }
+            }
+            UpdateOperator::Add => {
+                if let (Some(query_value), Some(found_value)) =
+                    (self.value.as_number(), last_value.as_number())
+                {
+                    let found_value = found_value.clone().as_f64().unwrap();
+                    let query_value = query_value.clone().as_f64().unwrap();
+                    let result = found_value + query_value;
+                    *last_value = Number::from_f64(result).into();
+                }
+            }
+
+            UpdateOperator::Substract => {
+                if let (Some(query_value), Some(found_value)) =
+                    (self.value.as_number(), last_value.as_number())
+                {
+                    let found_value = found_value.clone().as_f64().unwrap();
+                    let query_value = query_value.clone().as_f64().unwrap();
+                    let result = found_value - query_value;
+                    *last_value = Number::from_f64(result).into();
+                }
+            }
         }
         false
     }

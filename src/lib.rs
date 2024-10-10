@@ -352,10 +352,8 @@ impl Bison {
         let raw_collection = Bison::read_document(path.to_str().unwrap().to_string()).unwrap();
         // Collection values are the values of "collection_name"
         let collection_values = Bison::extract_collection(raw_collection, collection_name).unwrap();
-        println!("Before update {:?}", collection_values);
         let updated_collections = self._update(collection_values, update_query, maybe_query).unwrap();
 
-        println!("After update {:?}", updated_collections);
 
         let py_collections = {
             let mut result: Option<PyObject> = None;

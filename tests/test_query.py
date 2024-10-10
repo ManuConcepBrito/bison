@@ -165,3 +165,69 @@ def test_simple_set_update(
     updated_db = db.update(collection_name, update_query)
 
     assert updated_db[0] == updated_value
+
+
+def test_increment(db: Bison):
+    collection_name = "test"
+    db.create_collection(collection_name)
+
+    insert_value = {"a": {"myobj": 20}, "b": 20, "c": {"d": 100}}
+    db.insert(collection_name, insert_value)
+
+    updated_db = db.update(collection_name, {"b": {"$inc": ""}})
+
+    assert updated_db[0]["b"] == insert_value["b"] + 1
+
+    updated_db = db.update(collection_name, {"c": {"d": {"$inc": ""}}})
+
+    assert updated_db[0]["c"]["d"] == insert_value["c"]["d"] + 1
+
+
+def test_decrement(db: Bison):
+    collection_name = "test"
+    db.create_collection(collection_name)
+
+    insert_value = {"a": {"myobj": 20}, "b": 20, "c": {"d": 100}}
+    db.insert(collection_name, insert_value)
+
+    updated_db = db.update(collection_name, {"b": {"$dec": ""}})
+
+    assert updated_db[0]["b"] == insert_value["b"] - 1
+
+    updated_db = db.update(collection_name, {"c": {"d": {"$dec": ""}}})
+
+    assert updated_db[0]["c"]["d"] == insert_value["c"]["d"] - 1
+
+
+def test_add(db: Bison):
+    collection_name = "test"
+    db.create_collection(collection_name)
+    add_value = 5
+    insert_value = {"a": {"myobj": 20}, "b": 20, "c": {"d": 100}}
+    db.insert(collection_name, insert_value)
+
+    updated_db = db.update(collection_name, {"b": {"$add": add_value}})
+
+    assert updated_db[0]["b"] == insert_value["b"] + add_value
+
+    updated_db = db.update(collection_name, {"c": {"d": {"$add": add_value}}})
+
+    assert updated_db[0]["c"]["d"] == insert_value["c"]["d"] + add_value
+
+
+def test_substract(db: Bison):
+    collection_name = "test"
+    db.create_collection(collection_name)
+    substract_value = 5
+    insert_value = {"a": {"myobj": 20}, "b": 20, "c": {"d": 100}}
+    db.insert(collection_name, insert_value)
+
+    updated_db = db.update(
+        collection_name, {"b": {"$substract": substract_value}})
+
+    assert updated_db[0]["b"] == insert_value["b"] - substract_value
+
+    updated_db = db.update(
+        collection_name, {"c": {"d": {"$substract": substract_value}}})
+
+    assert updated_db[0]["c"]["d"] == insert_value["c"]["d"] - substract_value
