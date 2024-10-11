@@ -228,6 +228,26 @@ def test_substract(db: Bison):
     assert updated_db[0]["b"] == insert_value["b"] - substract_value
 
     updated_db = db.update(
-        collection_name, {"c": {"d": {"$substract": substract_value}}})
+        collection_name, {"c": {"d": {"$substract": substract_value}}}
+    )
 
     assert updated_db[0]["c"]["d"] == insert_value["c"]["d"] - substract_value
+
+
+def test_delete(db: Bison):
+    collection_name = "test"
+    db.create_collection(collection_name)
+    insert_value = {"a": {"myobj": 20, "another_obj": 30}, "b": 20, "c": {"d": 100}}
+    db.insert(collection_name, insert_value)
+
+    updated_db = db.update(collection_name, {"b": {"$delete": ""}})
+
+    assert len(updated_db) == 1
+    updated_db = updated_db[0]
+    assert "b" not in updated_db
+
+    updated_db = db.update(collection_name, {"a": {"myobj": {"$delete": ""}}})
+
+    assert len(updated_db) == 1
+    updated_db = updated_db[0]
+    assert "myobj" not in updated_db["a"]

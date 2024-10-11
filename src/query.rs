@@ -13,12 +13,14 @@ pub enum QueryOperator {
 }
 
 #[derive(Debug)]
+#[derive(PartialEq)]
 pub enum UpdateOperator {
     Set,
     Add,
     Substract,
     Increment,
     Decrement,
+    Delete,
 }
 
 #[derive(Debug)]
@@ -59,7 +61,7 @@ impl FromStr for UpdateOperator {
             "$substract" => Ok(UpdateOperator::Substract),
             "$inc" => Ok(UpdateOperator::Increment),
             "$dec" => Ok(UpdateOperator::Decrement),
-            // "$delete" => Ok(UpdateOperator::Delete),
+            "$delete" => Ok(UpdateOperator::Delete),
             _ => Err(()),
         }
     }
@@ -144,12 +146,18 @@ impl Query<UpdateOperator> {
             }
         }
         let last_key = &self.fields[self.fields.len() - 1];
-        match current_value.get_mut(last_key) {
-            Some(value) => self._execute_operator(value),
-            None => false,
+        // handle delete operator
+        if self.operator == UpdateOperator::Delete {
+            let _ = current_value.remove_entry(last_key);
+        } else {
+            match current_value.get_mut(last_key) {
+                Some(value) => self._execute_operator(value),
+                None => {},
+            }
         }
+        return false
     }
-    pub fn _execute_operator(&self, last_value: &mut Value) -> bool {
+    pub fn _execute_operator(&self, last_value: &mut Value) -> () {
         match self.operator {
             UpdateOperator::Set => *last_value = self.value.clone(),
             UpdateOperator::Increment => {
@@ -187,8 +195,10 @@ impl Query<UpdateOperator> {
                     *last_value = Number::from_f64(result).into();
                 }
             }
+
+            // This operator needs to be handle at key level
+            UpdateOperator::Delete => {}
         }
-        false
     }
 }
 
