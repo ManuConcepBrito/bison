@@ -3,6 +3,10 @@ import pytest
 from bison import Bison
 import json
 from pathlib import Path
+from tinydb import Query
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def test_create_from_document(tmp_path: Path) -> None:

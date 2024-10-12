@@ -142,7 +142,6 @@ def test_mixed_queries(db: Bison):
     query_result = query_result[0]
     assert query_result == insert_value
 
-
 @pytest.mark.parametrize(
     "initial_value, update_query, updated_value",
     [
@@ -163,8 +162,11 @@ def test_simple_set_update(
     db.insert(collection_name, initial_value)
 
     updated_db = db.update(collection_name, update_query)
-
     assert updated_db[0] == updated_value
+
+    db.write_all()
+    after_write = db.find(collection_name, {})
+    assert after_write == updated_db
 
 
 def test_increment(db: Bison):
@@ -176,11 +178,16 @@ def test_increment(db: Bison):
 
     updated_db = db.update(collection_name, {"b": {"$inc": ""}})
 
+
     assert updated_db[0]["b"] == insert_value["b"] + 1
 
     updated_db = db.update(collection_name, {"c": {"d": {"$inc": ""}}})
 
     assert updated_db[0]["c"]["d"] == insert_value["c"]["d"] + 1
+
+    db.write_all()
+    after_write = db.find(collection_name, {})
+    assert after_write == updated_db
 
 
 def test_decrement(db: Bison):
@@ -192,12 +199,17 @@ def test_decrement(db: Bison):
 
     updated_db = db.update(collection_name, {"b": {"$dec": ""}})
 
+    # Assert changes in file
     assert updated_db[0]["b"] == insert_value["b"] - 1
 
     updated_db = db.update(collection_name, {"c": {"d": {"$dec": ""}}})
 
+    # Assert changes in file
     assert updated_db[0]["c"]["d"] == insert_value["c"]["d"] - 1
 
+    db.write_all()
+    after_write = db.find(collection_name, {})
+    assert after_write == updated_db
 
 def test_add(db: Bison):
     collection_name = "test"
@@ -208,11 +220,17 @@ def test_add(db: Bison):
 
     updated_db = db.update(collection_name, {"b": {"$add": add_value}})
 
+    # Assert changes in file
     assert updated_db[0]["b"] == insert_value["b"] + add_value
 
     updated_db = db.update(collection_name, {"c": {"d": {"$add": add_value}}})
 
+    # Assert changes in file
     assert updated_db[0]["c"]["d"] == insert_value["c"]["d"] + add_value
+
+    db.write_all()
+    after_write = db.find(collection_name, {})
+    assert after_write == updated_db
 
 
 def test_substract(db: Bison):
@@ -225,22 +243,33 @@ def test_substract(db: Bison):
     updated_db = db.update(
         collection_name, {"b": {"$substract": substract_value}})
 
+    # Assert changes in file
     assert updated_db[0]["b"] == insert_value["b"] - substract_value
 
     updated_db = db.update(
         collection_name, {"c": {"d": {"$substract": substract_value}}}
     )
 
+    # Assert changes in file
     assert updated_db[0]["c"]["d"] == insert_value["c"]["d"] - substract_value
+
+    db.write_all()
+    after_write = db.find(collection_name, {})
+    assert after_write == updated_db
 
 
 def test_delete(db: Bison):
     collection_name = "test"
     db.create_collection(collection_name)
-    insert_value = {"a": {"myobj": 20, "another_obj": 30}, "b": 20, "c": {"d": 100}}
+    insert_value = {"a": {"myobj": 20, "another_obj": 30},
+                    "b": 20, "c": {"d": 100}}
     db.insert(collection_name, insert_value)
 
     updated_db = db.update(collection_name, {"b": {"$delete": ""}})
+
+    # Assert changes in file
+    after_write = db.find(collection_name, {})
+    assert after_write == updated_db
 
     assert len(updated_db) == 1
     updated_db = updated_db[0]
@@ -248,6 +277,11 @@ def test_delete(db: Bison):
 
     updated_db = db.update(collection_name, {"a": {"myobj": {"$delete": ""}}})
 
+    # Assert changes in file
     assert len(updated_db) == 1
     updated_db = updated_db[0]
     assert "myobj" not in updated_db["a"]
+
+    db.write_all()
+    after_write = db.find(collection_name, {})
+    assert after_write[0] == updated_db

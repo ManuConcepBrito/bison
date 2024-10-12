@@ -12,8 +12,7 @@ pub enum QueryOperator {
     LessThanEqual,
 }
 
-#[derive(Debug)]
-#[derive(PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum UpdateOperator {
     Set,
     Add,
@@ -23,12 +22,13 @@ pub enum UpdateOperator {
     Delete,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Query<T> {
     fields: Vec<String>,
     value: Value,
     operator: T,
 }
+
 
 #[derive(Debug)]
 pub struct QueryEngine<T> {
@@ -152,10 +152,10 @@ impl Query<UpdateOperator> {
         } else {
             match current_value.get_mut(last_key) {
                 Some(value) => self._execute_operator(value),
-                None => {},
+                None => {}
             }
         }
-        return false
+        return false;
     }
     pub fn _execute_operator(&self, last_value: &mut Value) -> () {
         match self.operator {
@@ -225,7 +225,6 @@ impl QueryEngine<QueryOperator> {
                     // TODO: Error should be a python error
                     query_op = QueryOperator::from_str(&query_op_str)
                         .expect(&format!("Unknown query operator found: {}", query_op_str));
-                    println!("Found operator: {:?}", query_op);
                 }
                 return Query {
                     fields,
