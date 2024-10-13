@@ -148,15 +148,10 @@ impl Query<UpdateOperator> {
         // handle delete operator
         if self.operator == UpdateOperator::Delete {
             let _ = current_value.remove_entry(last_key);
-        } else {
-            match current_value.get_mut(last_key) {
-                Some(value) => self._execute_operator(value),
-                None => {}
-            }
-        }
-        return false;
+        } else if let Some(value) = current_value.get_mut(last_key) { self._execute_operator(value) }
+        false
     }
-    pub fn _execute_operator(&self, last_value: &mut Value) -> () {
+    pub fn _execute_operator(&self, last_value: &mut Value) {
         match self.operator {
             UpdateOperator::Set => *last_value = self.value.clone(),
             UpdateOperator::Increment => {
@@ -219,17 +214,17 @@ impl QueryEngine<QueryOperator> {
                 // if no '$' operator is found, assume it is an EqualOperator
                 // For example: {"a": 10} => a == 10
                 let mut query_op = QueryOperator::Equal;
-                if fields.last().unwrap().chars().next() == Some('$') {
+                if fields.last().unwrap().starts_with('$') {
                     let query_op_str = fields.pop().unwrap();
                     // TODO: Error should be a python error
                     query_op = QueryOperator::from_str(&query_op_str)
-                        .expect(&format!("Unknown query operator found: {}", query_op_str));
+                        .unwrap_or_else(|_| panic!("Unknown query operator found: {}", query_op_str));
                 }
-                return Query {
+                Query {
                     fields,
                     value,
                     operator: query_op,
-                };
+                }
             })
             .collect();
         QueryEngine { queries }
@@ -243,7 +238,7 @@ impl QueryEngine<QueryOperator> {
                 return false;
             }
         }
-        return true;
+        true
     }
 }
 
@@ -257,26 +252,24 @@ impl QueryEngine<UpdateOperator> {
                 // if no '$' operator is found, assume it is an SetOperator
                 // For example: {"a": 10} => a == 10
                 let mut update_op = UpdateOperator::Set;
-                if fields.last().unwrap().chars().next() == Some('$') {
+                if fields.last().unwrap().starts_with('$') {
                     let update_op_str = fields.pop().unwrap();
                     // TODO: Error should be a python error
-                    update_op = UpdateOperator::from_str(&update_op_str).expect(&format!(
-                        "Unknown update query operator found: {}",
-                        update_op_str
-                    ));
+                    update_op = UpdateOperator::from_str(&update_op_str).unwrap_or_else(|_| panic!("Unknown update query operator found: {}",
+                        update_op_str));
                 }
                 println!("Found operator: {:?}", update_op);
-                return Query {
+                Query {
                     fields,
                     value,
                     operator: update_op,
-                };
+                }
             })
             .collect();
         QueryEngine { queries }
     }
 
-    pub fn execute(&self, collection: &mut Map<String, Value>) -> () {
+    pub fn execute(&self, collection: &mut Map<String, Value>) {
         let query_iter = self.queries.iter();
         for q in query_iter {
             q.execute(collection);
@@ -291,25 +284,25 @@ fn parse_query(sub_query: &Value, key: &str, fields: &mut Vec<String>) -> Value 
      * ["a", "b"] to be able to follow the collection and return the value (10).
      */
     fields.push(key.to_string());
-    let value = match sub_query {
+
+
+    match sub_query {
         Value::Object(map) => map
             .into_iter()
             .find_map(|(key, val)| {
                 // if the last element is an object, return that
                 // e.g, when setting an object {"a": {"$set": {"b": 30} }
                 // which would set {"a": {"b": 30} }
-                if key.chars().next() == Some('$') {
+                if key.starts_with('$') {
                     fields.push(key.to_string());
                     return Some(val.clone());
                 }
-                return Some(parse_query(val, key, fields));
+                Some(parse_query(val, key, fields))
             })
             .expect("Error while parsing query"),
         Value::Bool(b) => Value::Bool(*b),
         Value::Number(n) => Value::Number(n.clone()),
         Value::String(s) => Value::String(s.to_string()),
         _ => panic!("Not Valid query"),
-    };
-
-    return value;
+    }
 }

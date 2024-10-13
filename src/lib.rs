@@ -32,7 +32,7 @@ pub struct Bison {
 impl Bison {
     fn get_collection_path(&self, collection_name: &str) -> PathBuf {
         let mut path = self.base_path.clone();
-        path.push(&collection_name);
+        path.push(collection_name);
         path.set_extension("json");
         path
     }
@@ -252,7 +252,7 @@ impl Bison {
         }
     }
     pub fn create_collection(&mut self, collection_name: &str) -> PyResult<()> {
-        let path = self.get_collection_path(&collection_name);
+        let path = self.get_collection_path(collection_name);
         if path.exists() {
             return Ok(());
         }
@@ -272,7 +272,7 @@ impl Bison {
         collection_name: String,
         document: &Bound<'_, PyDict>,
     ) -> PyResult<()> {
-        let obj: Value = depythonize(&document).unwrap();
+        let obj: Value = depythonize(document).unwrap();
         self.insert_in_collection(&collection_name, obj)
     }
 
@@ -281,7 +281,7 @@ impl Bison {
         collection_name: String,
         documents: &Bound<'_, PyList>,
     ) -> PyResult<()> {
-        let obj: Value = depythonize(&documents).unwrap();
+        let obj: Value = depythonize(documents).unwrap();
         self.insert_in_collection(&collection_name, obj)
     }
 
@@ -299,7 +299,7 @@ impl Bison {
             // Bison::insert_in_collection already
             Some(_) => self.insert_in_collection(&collection_name, values),
             None => {
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
                     "Document is not an array",
                 ))
             }
@@ -416,9 +416,7 @@ impl Bison {
         let _ = self
             .collections()
             .unwrap()
-            .into_iter()
-            .map(|collection_name| self.drop_collection(collection_name))
-            .collect::<Result<(), PyErr>>();
+            .into_iter().try_for_each(|collection_name| self.drop_collection(collection_name));
         let _ = fs::remove_dir(self.base_path.clone());
         Ok(())
     }
@@ -426,7 +424,7 @@ impl Bison {
         match self.collections.get(&collection_name) {
             Some(collection) => self._write(&collection_name, collection.as_array().unwrap()),
             None => {
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
                     "Collection '{}' not found in stored collections",
                     collection_name
                 )))

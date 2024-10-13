@@ -50,34 +50,6 @@ def test_insert(benchmark, tmp_path: Path):
     benchmark(insert_and_flush)
 
 
-def test_find_tinydb(tinydb_benchmark, benchmark):
-    query = Query()
-    table = tinydb_benchmark.table("elements")
-
-    result = benchmark(table.search, query.location == "Location 500")
-    assert result[0] == {
-        "id": 500,
-        "name": "Element 500",
-        "location": "Location 500",
-        "value": 5000,
-        "status": "active",
-    }
-
-
-def test_find(bisondb_benchmark: Bison, benchmark: Callable[..., None]) -> None:
-    result = benchmark(
-        bisondb_benchmark.find, "elements", {"location": "Location 500"}
-    )
-
-    assert result[0] == {
-        "id": 500,
-        "name": "Element 500",
-        "location": "Location 500",
-        "value": 5000,
-        "status": "active",
-    }
-
-
 def test_find_tinydb_no_cache(tinydb_benchmark, benchmark):
     query = Query()
     table = tinydb_benchmark.table("elements")
@@ -97,7 +69,7 @@ def test_find_tinydb_no_cache(tinydb_benchmark, benchmark):
     }
 
 
-def test_find(bisondb_benchmark: Bison, benchmark: Callable[..., None]) -> None:
+def test_find_no_cache(bisondb_benchmark: Bison, benchmark: Callable[..., None]) -> None:
     def search_no_cache():
         bisondb_benchmark.clear_cache()
         return bisondb_benchmark.find("elements", {"location": "Location 500"})
