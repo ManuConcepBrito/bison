@@ -7,6 +7,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+
 @pytest.mark.parametrize(
     "insert, query",
     [
@@ -285,3 +286,18 @@ def test_delete(db: Bison):
     db.write_all()
     after_write = db.find(collection_name, {})
     assert after_write[0] == updated_db
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        ({"a": {"$gt": False}}),
+        ({"b": {"$gte": []}}),
+        ({"c": {"$lt": False}}),
+        ({"d": {"$lte": False}}),
+    ],
+)
+def test_not_valid_query(db: Bison, query: Dict[str, Any]) -> None:
+    db.insert("test", {"a": 10})
+    with pytest.raises(ValueError):
+        db.find("test", {"a": {"$gt": False}})

@@ -7,6 +7,7 @@ use pyo3::PyObject;
 use pythonize::{depythonize, pythonize};
 use query::{QueryOperator, UpdateOperator};
 use serde_json::{Map, Value};
+use std::borrow::Cow;
 use std::fs;
 use std::fs::rename;
 use std::fs::File;
@@ -15,7 +16,6 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io;
 use std::io::BufWriter;
 use std::io::{BufReader, Write};
-use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
 mod query;
@@ -26,9 +26,6 @@ pub struct Bison {
     collections: Map<String, Value>,
     query_cache: LruCache<u64, Vec<Value>>,
 }
-// TODO(manuel): Implement update operations
-// delete, increment, decrement, add, subtract, set
-// for reference: https://github.com/msiemens/tinydb/blob/master/tests/test_operations.py
 impl Bison {
     fn get_collection_path(&self, collection_name: &str) -> PathBuf {
         let mut path = self.base_path.clone();
@@ -37,8 +34,8 @@ impl Bison {
         path
     }
 
-    fn read_document(document_name: String) -> Result<Value, PyErr> {
-        let file_path = PathBuf::from(document_name.clone());
+    fn read_document(document_name: &str) -> Result<Value, PyErr> {
+        let file_path = PathBuf::from(document_name);
         let file_result = OpenOptions::new().read(true).open(&file_path);
 
         let file = match file_result {
@@ -56,6 +53,40 @@ impl Bison {
         let json_value: Value = serde_json::from_reader(reader)
             .map_err(|_| PyErr::new::<PyValueError, _>("Error deserializing JSON"))?;
         Ok(json_value)
+    }
+    fn find_collection_in_storage(&mut self, collection_name: &str) -> Result<Vec<Value>, PyErr> {
+        // Try to load from disk
+        let mut collection_path = self.base_path.clone().join(PathBuf::from(collection_name));
+        collection_path.set_extension("json");
+        if !collection_path.exists() {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Collection with name '{}' not found on disk",
+                collection_name
+            )));
+        }
+
+        // Load the collection from disk
+        let values_in_storage: Map<String, Value> =
+            Bison::read_document(collection_path.to_str().unwrap())?
+                .as_object()
+                .unwrap()
+                .to_owned();
+
+        // Extract the collection by key, convert to Vec<Value> and return as owned
+        let loaded_collection = values_in_storage
+            .get(collection_name)
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .clone();
+
+        // Store it in `self.collections` for future use
+        self.collections.insert(
+            collection_name.to_string(),
+            Value::Array(loaded_collection.clone()),
+        );
+
+        Ok(loaded_collection)
     }
 
     pub fn extract_collection(
@@ -96,6 +127,10 @@ impl Bison {
             } else {
                 arr.push(insert_value);
             }
+        } else {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "Expected collection to be array",
+            ));
         }
         Ok(())
     }
@@ -107,13 +142,14 @@ impl Bison {
     ) -> Result<Vec<Value>, PyErr> {
         // Inner method that returns Vec<Value> instead
         // of a python dict
-
-        let collection_values = self
-            .collections
-            .get(collection_name)
-            .unwrap()
-            .as_array()
-            .unwrap();
+        let in_memory_collection = self.collections.get(collection_name);
+        let collection_values: Cow<Vec<Value>> = match in_memory_collection {
+            Some(c) => Cow::Borrowed(c.as_array().unwrap()),
+            None => match self.find_collection_in_storage(collection_name) {
+                Ok(in_storage_collection) => Cow::Owned(in_storage_collection),
+                Err(err) => return Err(err),
+            },
+        };
         let query: Value = match maybe_query {
             Some(q) => depythonize(q).unwrap(),
             None => {
@@ -131,17 +167,19 @@ impl Bison {
         }
         let query_engine = query::QueryEngine::<QueryOperator>::new(query_object);
         // execute queries and return collections
-        let found_collections: Vec<Value> = collection_values
-            .iter()
-            .filter_map(|c| {
-                let c_obj = c.as_object().unwrap();
-                if query_engine.execute(c_obj) {
-                    Some(c.clone())
-                } else {
-                    None
+        let mut found_collections: Vec<Value> = vec![];
+        for collection in collection_values.iter() {
+            let c_obj = collection.as_object().unwrap();
+            let query_result = query_engine.execute(c_obj);
+            match query_result {
+                Ok(result) => {
+                    if result {
+                        found_collections.push(collection.clone());
+                    }
                 }
-            })
-            .collect();
+                Err(err) => return Err(err),
+            }
+        }
         self.query_cache.put(query_hash, found_collections.to_vec());
         Ok(found_collections)
     }
@@ -162,7 +200,7 @@ impl Bison {
                     query::QueryEngine::<QueryOperator>::new(filter_query_object);
                 collection_values.iter_mut().for_each(|c| {
                     let c_obj = c.as_object_mut().unwrap();
-                    if filter_query_engine.execute(c_obj) {
+                    if filter_query_engine.execute(c_obj).unwrap() {
                         // Do update
                         update_query_engine.execute(c_obj)
                     }
@@ -226,17 +264,17 @@ impl Bison {
         }
 
         let collections = serde_json::Map::new();
-        // TODO: Hardcoded cache size
-        let query_cache = LruCache::new(NonZeroUsize::new(100).unwrap());
+        let query_cache = LruCache::new(query::QUERY_CACHE_SIZE);
         let mut db = Bison {
             base_path,
             collections,
             query_cache,
         };
+
         match document_name {
             Some(document_name) => {
                 // Initializes a database from an existing document
-                let document: Map<String, Value> = Bison::read_document(document_name)?
+                let document: Map<String, Value> = Bison::read_document(&document_name)?
                     .as_object()
                     .unwrap()
                     .to_owned();
@@ -293,16 +331,14 @@ impl Bison {
         // Insert many from json (array document)
         // The top most object in the json document
         // should be an array
-        let values: Value = Bison::read_document(document_name)?;
+        let values: Value = Bison::read_document(&document_name)?;
         match values.as_array() {
             // Here we do not insert the array as we are making that distinction in
             // Bison::insert_in_collection already
             Some(_) => self.insert_in_collection(&collection_name, values),
-            None => {
-                Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                    "Document is not an array",
-                ))
-            }
+            None => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "Document is not an array",
+            )),
         }
     }
 
@@ -312,7 +348,7 @@ impl Bison {
         collection_name: String,
         maybe_query: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<PyObject> {
-        let found_collections = self._find(&collection_name, maybe_query).unwrap();
+        let found_collections = self._find(&collection_name, maybe_query)?;
 
         let py_collections = {
             let mut result: Option<PyObject> = None;
@@ -347,13 +383,16 @@ impl Bison {
     ) -> PyResult<PyObject> {
         // Reset cache after every update
         // TODO: Hardcoded cache size
-        self.query_cache = LruCache::new(NonZeroUsize::new(100).unwrap());
-        let collection_values = self
-            .collections
-            .get(&collection_name)
-            .unwrap()
-            .as_array()
-            .unwrap();
+        self.query_cache = LruCache::new(query::QUERY_CACHE_SIZE);
+
+        let in_memory_collection = self.collections.get(&collection_name);
+        let collection_values: Cow<Vec<Value>> = match in_memory_collection {
+            Some(c) => Cow::Borrowed(c.as_array().unwrap()),
+            None => match self.find_collection_in_storage(&collection_name) {
+                Ok(in_storage_collection) => Cow::Owned(in_storage_collection),
+                Err(err) => return Err(err),
+            },
+        };
 
         let updated_collections = self
             ._update(collection_values.to_vec(), update_query, maybe_query)
@@ -416,19 +455,18 @@ impl Bison {
         let _ = self
             .collections()
             .unwrap()
-            .into_iter().try_for_each(|collection_name| self.drop_collection(collection_name));
+            .into_iter()
+            .try_for_each(|collection_name| self.drop_collection(collection_name));
         let _ = fs::remove_dir(self.base_path.clone());
         Ok(())
     }
     pub fn write(&self, collection_name: String) -> PyResult<()> {
         match self.collections.get(&collection_name) {
             Some(collection) => self._write(&collection_name, collection.as_array().unwrap()),
-            None => {
-                Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                    "Collection '{}' not found in stored collections",
-                    collection_name
-                )))
-            }
+            None => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Collection '{}' not found in stored collections",
+                collection_name
+            ))),
         }
     }
 
@@ -445,8 +483,7 @@ impl Bison {
         Ok(())
     }
     pub fn clear_cache(&mut self) -> PyResult<()> {
-        // TODO: Hardcoded cache size
-        self.query_cache = LruCache::new(NonZeroUsize::new(100).unwrap());
+        self.query_cache = LruCache::new(query::QUERY_CACHE_SIZE);
         Ok(())
     }
 }

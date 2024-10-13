@@ -3,7 +3,6 @@ import pytest
 from bison import Bison
 import json
 from pathlib import Path
-from tinydb import Query
 import logging
 
 logger = logging.getLogger(__name__)
@@ -56,3 +55,41 @@ def test_remove_collection(db: Bison) -> None:
     collections = db.collections()
 
     assert "test" not in collections
+
+
+def test_missing_collection(db: Bison) -> None:
+    with pytest.raises(ValueError):
+        db.find("non_existing_collection", {"some_value": 10})
+
+
+def test_find_on_existing_db(tmp_path: Path) -> None:
+    """Data correctly loaded from existing db"""
+    collection_name = "test"
+    data_in_collection = [{"a": 10, "b": 200}, {"a": 1, "b": 20}]
+    json_data = {f"{collection_name}": data_in_collection}
+
+    document_path = os.path.join(tmp_path, f"{collection_name}.json")
+    with open(document_path, "w") as f:
+        json.dump(json_data, f)
+    db = Bison(str(tmp_path))
+
+    found_in_db = db.find(collection_name)
+
+    assert found_in_db == data_in_collection
+
+
+def test_update_on_existing_db(tmp_path: Path) -> None:
+    """Data correctly loaded from existing db"""
+    collection_name = "test"
+    data_in_collection = [{"a": 10, "b": 200}, {"a": 1, "b": 20}]
+    updated_collection = [{"a": 11, "b": 200}, {"a": 2, "b": 20}]
+    json_data = {f"{collection_name}": data_in_collection}
+
+    document_path = os.path.join(tmp_path, f"{collection_name}.json")
+    with open(document_path, "w") as f:
+        json.dump(json_data, f)
+    db = Bison(str(tmp_path))
+
+    found_in_db = db.update(collection_name, {"a": {"$inc": ""}})
+
+    assert found_in_db == updated_collection

@@ -1,6 +1,10 @@
+use pyo3::PyErr;
 use serde_json::{Map, Number, Value};
 use std::fmt::Debug;
+use std::num::NonZeroUsize;
 use std::str::FromStr;
+
+pub const QUERY_CACHE_SIZE: NonZeroUsize = unsafe { NonZeroUsize::new_unchecked(100) };
 
 #[derive(Debug)]
 pub enum QueryOperator {
@@ -67,7 +71,7 @@ impl FromStr for UpdateOperator {
 }
 
 impl Query<QueryOperator> {
-    pub fn execute(&self, collection: &Map<String, Value>) -> bool {
+    pub fn execute(&self, collection: &Map<String, Value>) -> Result<bool, PyErr> {
         let mut current_value = collection;
 
         for key in &self.fields[..self.fields.len() - 1] {
@@ -76,55 +80,70 @@ impl Query<QueryOperator> {
                     current_value = map;
                 }
                 _ => {
-                    return false;
+                    return Ok(false);
                 }
             }
         }
         let last_key = &self.fields[self.fields.len() - 1];
         match current_value.get(last_key) {
             Some(value) => self._execute_operator(value),
-            None => false,
+            None => Ok(false),
         }
     }
-    pub fn _execute_operator(&self, last_value: &Value) -> bool {
+    pub fn _execute_operator(&self, last_value: &Value) -> Result<bool, PyErr> {
         match self.operator {
-            QueryOperator::Equal => &self.value == last_value,
-            QueryOperator::NotEqual => &self.value != last_value,
+            QueryOperator::Equal => Ok(&self.value == last_value),
+            QueryOperator::NotEqual => Ok(&self.value != last_value),
             // TODO: The following should panic, an a comprehensible error
             // be sent to python
             QueryOperator::GreaterThan => {
                 if let (Some(query_value), Some(found_value)) =
                     (self.value.as_number(), last_value.as_number())
                 {
-                    return found_value.clone().as_f64() > query_value.clone().as_f64();
+                    return Ok(found_value.clone().as_f64() > query_value.clone().as_f64());
                 }
-                false
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                    "Malformed query, non-numeric value found for operator {:?}",
+                    self.operator
+                )));
             }
 
             QueryOperator::LessThan => {
                 if let (Some(query_value), Some(found_value)) =
                     (self.value.as_number(), last_value.as_number())
                 {
-                    return found_value.clone().as_f64() < query_value.clone().as_f64();
+                    return Ok(found_value.clone().as_f64() < query_value.clone().as_f64());
                 }
-                false
+
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                    "Malformed query, non-numeric value found for operator {:?}",
+                    self.operator
+                )));
             }
 
             QueryOperator::GreaterThanEqual => {
                 if let (Some(query_value), Some(found_value)) =
                     (self.value.as_number(), last_value.as_number())
                 {
-                    return found_value.clone().as_f64() >= query_value.clone().as_f64();
+                    return Ok(found_value.clone().as_f64() >= query_value.clone().as_f64());
                 }
-                false
+
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                    "Malformed query, non-numeric value found for operator {:?}",
+                    self.operator
+                )));
             }
             QueryOperator::LessThanEqual => {
                 if let (Some(query_value), Some(found_value)) =
                     (self.value.as_number(), last_value.as_number())
                 {
-                    return found_value.clone().as_f64() <= query_value.clone().as_f64();
+                    return Ok(found_value.clone().as_f64() <= query_value.clone().as_f64());
                 }
-                false
+
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                    "Malformed query, non-numeric value found for operator {:?}",
+                    self.operator
+                )));
             }
         }
     }
@@ -148,7 +167,9 @@ impl Query<UpdateOperator> {
         // handle delete operator
         if self.operator == UpdateOperator::Delete {
             let _ = current_value.remove_entry(last_key);
-        } else if let Some(value) = current_value.get_mut(last_key) { self._execute_operator(value) }
+        } else if let Some(value) = current_value.get_mut(last_key) {
+            self._execute_operator(value)
+        }
         false
     }
     pub fn _execute_operator(&self, last_value: &mut Value) {
@@ -217,8 +238,9 @@ impl QueryEngine<QueryOperator> {
                 if fields.last().unwrap().starts_with('$') {
                     let query_op_str = fields.pop().unwrap();
                     // TODO: Error should be a python error
-                    query_op = QueryOperator::from_str(&query_op_str)
-                        .unwrap_or_else(|_| panic!("Unknown query operator found: {}", query_op_str));
+                    query_op = QueryOperator::from_str(&query_op_str).unwrap_or_else(|_| {
+                        panic!("Unknown query operator found: {}", query_op_str)
+                    });
                 }
                 Query {
                     fields,
@@ -230,15 +252,13 @@ impl QueryEngine<QueryOperator> {
         QueryEngine { queries }
     }
 
-    pub fn execute(&self, collection: &Map<String, Value>) -> bool {
+    pub fn execute(&self, collection: &Map<String, Value>) -> Result<bool, PyErr> {
         let query_iter = self.queries.iter();
         for q in query_iter {
             let query_result = q.execute(collection);
-            if !query_result {
-                return false;
-            }
+            return query_result;
         }
-        true
+        Ok(true)
     }
 }
 
@@ -255,10 +275,10 @@ impl QueryEngine<UpdateOperator> {
                 if fields.last().unwrap().starts_with('$') {
                     let update_op_str = fields.pop().unwrap();
                     // TODO: Error should be a python error
-                    update_op = UpdateOperator::from_str(&update_op_str).unwrap_or_else(|_| panic!("Unknown update query operator found: {}",
-                        update_op_str));
+                    update_op = UpdateOperator::from_str(&update_op_str).unwrap_or_else(|_| {
+                        panic!("Unknown update query operator found: {}", update_op_str)
+                    });
                 }
-                println!("Found operator: {:?}", update_op);
                 Query {
                     fields,
                     value,
@@ -284,7 +304,6 @@ fn parse_query(sub_query: &Value, key: &str, fields: &mut Vec<String>) -> Value 
      * ["a", "b"] to be able to follow the collection and return the value (10).
      */
     fields.push(key.to_string());
-
 
     match sub_query {
         Value::Object(map) => map
