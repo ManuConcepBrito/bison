@@ -1,6 +1,7 @@
 <p align="center">
 <img src="https://github.com/user-attachments/assets/9ba39171-29d6-4d4c-8ab8-fd1c9687b83d" alt="Bison" width="256" height="256"></a>
 </p>
+
 # Bison
 
 Bison is a fast, lightweight NoSQL database, written in Rust with seamless Python bindings. It combines the speed and safety of Rust with the flexibility of JSON storage, offering a MongoDB-like query language to easily store, query, and manipulate your data. Perfect for developers who need a powerful, schema-less database that integrates smoothly into Python projects, Bison is designed to handle complex queries and efficient updates while keeping your data operations simple and intuitive.
