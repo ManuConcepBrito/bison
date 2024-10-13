@@ -1,10 +1,9 @@
 <p align="center">
-<img src="https://github.com/user-attachments/assets/9ba39171-29d6-4d4c-8ab8-fd1c9687b83d" alt="Bison"></a>
+<img src="https://github.com/user-attachments/assets/9ba39171-29d6-4d4c-8ab8-fd1c9687b83d" alt="Bison" width="256" height="256"></a>
 </p>
-
 # Bison
 
-Bison is a NoSQL (JSON) database written in Rust with Python bindings. It supports a MongoDB-like query language, making it familiar and easy to use for developers experienced with document-based databases. Bison is designed to efficiently store, query, and update JSON data with support for various query operators.
+Bison is a fast, lightweight NoSQL database, written in Rust with seamless Python bindings. It combines the speed and safety of Rust with the flexibility of JSON storage, offering a MongoDB-like query language to easily store, query, and manipulate your data. Perfect for developers who need a powerful, schema-less database that integrates smoothly into Python projects, Bison is designed to handle complex queries and efficient updates while keeping your data operations simple and intuitive.
 
 ## Features
 
@@ -13,7 +12,9 @@ Bison is a NoSQL (JSON) database written in Rust with Python bindings. It suppor
 - **Insert and Query**: Easily insert documents into collections and retrieve them based on queries.
 - **Update Operators**: Modify documents using `$set`, `$inc`, `$dec`, `$add`, `$substract`, and `$delete` operators.
 - **Mixed Queries**: Perform complex queries with multiple conditions and nested fields.
+- **Conditional Updates**: Update only the documents that match a query filter.
 - **Python Bindings**: Fully integrated with Python via bindings, allowing you to use Bison in Python projects.
+- **File Commit**: Changes are committed to disk only when explicitly requested via `db.write()` or `db.write_all()`.
 
 ## Installation
 
@@ -26,6 +27,7 @@ pip install bison-db
 ## Basic Usage
 
 ### Creating a Collection and Inserting Documents
+
 
 ```python
 from bison import Bison
@@ -42,6 +44,7 @@ db.insert("test", {"a": True, "b": False})
 
 ### Querying Data
 
+
 ```python
 # Simple equality query
 result = db.find("test", {"a": 10})
@@ -52,7 +55,32 @@ result = db.find("test", {"a": {"$gt": 5}})
 print(result)  # Returns documents where 'a' is greater than 5
 ```
 
+### Update Documents Conditionally
+
+You can update documents only when a filter query is matched. If no filter query is provided, all documents in the collection will be updated.
+
+
+```python
+# Conditionally update documents where 'a' equals 10
+db.update("test", {"b": {"$set": 30}}, {"a": {"$eq": 10}})
+
+# Update all documents in the collection if no filter is provided
+db.update("test", {"b": {"$set": 50}}, None)
+```
+
+### Committing Changes to Disk
+By default, Bison stores all updates in memory. Changes will only be committed to a file when you explicitly call `db.write(collection_name)` for a specific collection, or `db.write_all()` to write all collections to disk:
+
+```python
+# Commit changes of a specific collection to disk
+db.write("test")
+
+# Commit changes of all collections to disk
+db.write_all()
+```
+
 ### Update Documents
+
 
 ```python
 # Update document by setting a new value
@@ -66,6 +94,7 @@ db.update("test", {"a": {"$dec": ""}})
 ```
 
 ### Delete Fields
+
 
 ```python
 # Delete a field from a document
@@ -89,6 +118,7 @@ Bison supports a range of MongoDB-like query operators:
 - `$lte`: Matches values that are less than or equal to a specified value.
 
 ### Example Queries
+
 
 ```python
 # Equality
@@ -122,6 +152,7 @@ Bison provides several operators for updating fields within documents:
 
 ### Example Updates
 
+
 ```python
 # Set a value
 db.update("test", {"a": {"$set": 40}})
@@ -136,6 +167,7 @@ db.update("test", {"a": {"$delete": ""}})
 ## Mixed Queries
 
 You can combine multiple query conditions, including nested fields:
+
 
 ```python
 # Query with mixed conditions
@@ -153,6 +185,7 @@ print(result)  # Returns documents matching all the conditions
 ## Handling Errors
 
 Invalid queries will raise exceptions. For example:
+
 
 ```python
 from bison import Bison
