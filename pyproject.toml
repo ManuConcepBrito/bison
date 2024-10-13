@@ -3,7 +3,7 @@ requires = ["maturin>=1.7,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "bison"
+name = "bison-db"
 requires-python = ">=3.8"
 classifiers = [
     "Programming Language :: Rust",
@@ -11,5 +11,7 @@ classifiers = [
     "Programming Language :: Python :: Implementation :: PyPy",
 ]
 dynamic = ["version"]
+description="Bison is a fast, lightweight NoSQL database, written in Rust with seamless Python bindings."
+authors=[{name="Manuel Concepcion Brito"}]
 [tool.maturin]
 features = ["pyo3/extension-module"]
