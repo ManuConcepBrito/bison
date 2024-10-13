@@ -29,7 +29,6 @@ pub struct Query<T> {
     operator: T,
 }
 
-
 #[derive(Debug)]
 pub struct QueryEngine<T> {
     queries: Vec<Query<T>>,
