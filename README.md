@@ -24,6 +24,14 @@ To use Bison in your Python project, install it using:
 ```bash
 pip install bison-db
 ```
+## Performance
+I decided to compare Bison against TinyDB as it is the most similar database to Bison in terms of purpose.
+In our performance benchmarks, Bison is around 2-13x faster than TinyDB (depending on the type of operations and
+number of documents).
+
+<p align="center">
+  <img height="256" src="https://github.com/ManuConcepBrito/docs/0001_1000_ops_1000_docs.png" alt="Bison">
+</p>
 
 ## Basic Usage
 
