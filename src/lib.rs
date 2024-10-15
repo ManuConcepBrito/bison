@@ -8,6 +8,7 @@ use pythonize::{depythonize, pythonize};
 use query::{QueryOperator, UpdateOperator};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::fs;
 use std::fs::rename;
 use std::fs::File;
@@ -21,6 +22,7 @@ use std::sync::{Arc, RwLock};
 
 mod query;
 
+#[derive(Debug)]
 #[pyclass]
 pub struct Bison {
     base_path: PathBuf,
@@ -189,17 +191,18 @@ impl Bison {
             },
         };
         {
-
             let mut collection_values = collection_values_arc.write().unwrap();
             let update_query: Value = depythonize(py_update_query).unwrap();
             let update_query_object: &Map<String, Value> = update_query.as_object().unwrap();
-            let update_query_engine = query::QueryEngine::<UpdateOperator>::new(update_query_object);
+            let update_query_engine =
+                query::QueryEngine::<UpdateOperator>::new(update_query_object);
             match maybe_filter_query {
                 Some(q) => {
                     let filter_query: Value = depythonize(q).unwrap();
-                    let filter_query_object: &Map<String, Value> = filter_query.as_object().unwrap();
+                    let filter_query_object: &Map<String, Value> =
+                        filter_query.as_object().unwrap();
                     let filter_query_engine =
-                    query::QueryEngine::<QueryOperator>::new(filter_query_object);
+                        query::QueryEngine::<QueryOperator>::new(filter_query_object);
                     collection_values.iter_mut().for_each(|c| {
                         let c_obj = c.as_object_mut().unwrap();
                         if filter_query_engine.execute(c_obj).unwrap() {
@@ -213,12 +216,15 @@ impl Bison {
                     update_query_engine.execute(c_obj)
                 }),
             };
-
         }
         Ok(collection_values_arc.clone())
     }
 
-    fn _write(&self, collection_name: &str, document: Arc<RwLock<Vec<Value>>>) -> Result<(), PyErr> {
+    fn _write(
+        &self,
+        collection_name: &str,
+        document: Arc<RwLock<Vec<Value>>>,
+    ) -> Result<(), PyErr> {
         let path = self.get_collection_path(collection_name);
         let temp_path = format!("{}.tmp", collection_name); // Temporary file
         let temp_file_result = OpenOptions::new()
@@ -261,38 +267,57 @@ impl Bison {
 #[pymethods]
 impl Bison {
     #[new]
-    #[pyo3(signature = (name, document_name = None))]
-    pub fn new(name: String, document_name: Option<String>) -> PyResult<Self> {
+    #[pyo3(signature = (name))]
+    pub fn new(name: String) -> PyResult<Self> {
         let base_path = PathBuf::from(name.clone());
-        if !base_path.exists() {
-            let _ = fs::create_dir(&base_path);
-        }
-
         let collections = HashMap::new();
         let query_cache = LruCache::new(query::QUERY_CACHE_SIZE);
         let mut db = Bison {
-            base_path,
+            base_path: base_path.clone(),
             collections,
             query_cache,
         };
+        if !base_path.exists() {
+            let _ = fs::create_dir(&base_path);
+        } else if base_path.exists() {
+            let json = &OsStr::new("json");
 
-        match document_name {
-            Some(document_name) => {
-                // Initializes a database from an existing document
-                let document: Map<String, Value> = Bison::read_document(&document_name)?
-                    .as_object()
+            // want all files with a .json extension
+            let entries = Vec::from_iter(
+                fs::read_dir(&db.base_path)?
+                    .filter_map(Result::ok)
+                    .map(|e| e.path())
+                    .filter(|p| p.extension() == Some(json)),
+            );
+            for entry in entries {
+                let collection_path = entry.to_str().unwrap();
+                let collection_name = entry.file_stem().unwrap().to_str().unwrap();
+                // This is {[values]} if written by bison
+
+                let collection_in_storage: Vec<Value> = Bison::read_document(collection_path)?
+                    .as_array()
                     .unwrap()
                     .to_owned();
-                for (key, value) in document {
-                    db.insert_in_collection(&key, value)?
-                }
-                Ok(db)
+                db.collections.insert(
+                    collection_name.to_string(),
+                    Arc::new(RwLock::new(collection_in_storage)),
+                );
             }
-            None => {
-                // TODO: go check in storage which tables are there
-                Ok(db)
-            }
+        } else {
+            // TODO: Remove this and move to fn
         }
+        Ok(db)
+    }
+    pub fn load_from_document(&mut self, document_path: &str) -> PyResult<()> {
+        // Initializes a database from an existing document
+        let document: Map<String, Value> = Bison::read_document(&document_path)?
+            .as_object()
+            .unwrap()
+            .to_owned();
+        for (key, value) in document {
+            self.insert_in_collection(&key, value)?
+        }
+        return Ok(());
     }
     pub fn create_collection(&mut self, collection_name: &str) -> PyResult<()> {
         let path = self.get_collection_path(collection_name);

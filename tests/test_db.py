@@ -16,7 +16,8 @@ def test_create_from_document(tmp_path: Path) -> None:
     document_path = os.path.join(tmp_path, "document.json")
     with open(document_path, "w") as f:
         json.dump(json_data, f)
-    db = Bison("new_db", document_path)
+    db = Bison("new_db")
+    db.load_from_document(document_path)
     try:
         assert set(db.collections()) == set(json_data.keys())
 
@@ -49,6 +50,22 @@ def test_insert_many_from_document(db: Bison, tmp_path: Path) -> None:
     assert len(db.find(collection_name, {})) == len(json_data)
 
 
+def test_load_from_existing(tmp_path: Path) -> None:
+    db = Bison(str(tmp_path))
+    data_in_collection = {"a": 10, "b": 200}
+    collection_names = ["collection_1", "collection_2", "collection_3"]
+    for collection_name in collection_names:
+        db.insert(collection_name, data_in_collection)
+    db.write_all()
+    del db
+
+    # Load again
+    db = Bison(str(tmp_path))
+    for collection in db.collections():
+        found = db.find(collection)
+        assert found[0] == data_in_collection
+
+
 def test_remove_collection(db: Bison) -> None:
     db.drop_collection("test")
 
@@ -66,11 +83,10 @@ def test_find_on_existing_db(tmp_path: Path) -> None:
     """Data correctly loaded from existing db"""
     collection_name = "test"
     data_in_collection = [{"a": 10, "b": 200}, {"a": 1, "b": 20}]
-    json_data = {f"{collection_name}": data_in_collection}
 
     document_path = os.path.join(tmp_path, f"{collection_name}.json")
     with open(document_path, "w") as f:
-        json.dump(json_data, f)
+        json.dump(data_in_collection, f)
     db = Bison(str(tmp_path))
 
     found_in_db = db.find(collection_name)
@@ -83,13 +99,13 @@ def test_update_on_existing_db(tmp_path: Path) -> None:
     collection_name = "test"
     data_in_collection = [{"a": 10, "b": 200}, {"a": 1, "b": 20}]
     updated_collection = [{"a": 11, "b": 200}, {"a": 2, "b": 20}]
-    json_data = {f"{collection_name}": data_in_collection}
 
     document_path = os.path.join(tmp_path, f"{collection_name}.json")
     with open(document_path, "w") as f:
-        json.dump(json_data, f)
+        json.dump(data_in_collection, f)
     db = Bison(str(tmp_path))
 
-    found_in_db = db.update(collection_name, {"a": {"$inc": ""}}, return_result=True)
+    found_in_db = db.update(
+        collection_name, {"a": {"$inc": ""}}, return_result=True)
 
     assert found_in_db == updated_collection
