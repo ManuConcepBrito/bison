@@ -90,6 +90,6 @@ def test_update_on_existing_db(tmp_path: Path) -> None:
         json.dump(json_data, f)
     db = Bison(str(tmp_path))
 
-    found_in_db = db.update(collection_name, {"a": {"$inc": ""}})
+    found_in_db = db.update(collection_name, {"a": {"$inc": ""}}, return_result=True)
 
     assert found_in_db == updated_collection
