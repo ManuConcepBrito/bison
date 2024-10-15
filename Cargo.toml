@@ -1,6 +1,6 @@
 [package]
 name = "bison"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description="Bison is a fast, lightweight NoSQL database, written in Rust with seamless Python bindings."
 license="MIT"
