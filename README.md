@@ -32,7 +32,12 @@ number of documents).
 <p align="center">
   <img height="256" src="https://github.com/ManuConcepBrito/bison/blob/master/docs/0001_1000_ops_1000_docs.png" alt="Bison">
 </p>
+You can re-create the performance by running:
 
+```bash
+pytest -k comparison
+
+```
 ## Basic Usage
 
 ### Creating a Collection and Inserting Documents
