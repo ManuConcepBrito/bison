@@ -30,7 +30,7 @@ In our performance benchmarks, Bison is around 2-13x faster than TinyDB (dependi
 number of documents).
 
 <p align="center">
-  <img height="256" src="https://github.com/ManuConcepBrito/docs/0001_1000_ops_1000_docs.png" alt="Bison">
+  <img height="256" src="https://github.com/ManuConcepBrito/bison/blob/master/docs/0001_1000_ops_1000_docs.png" alt="Bison">
 </p>
 
 ## Basic Usage
