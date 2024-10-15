@@ -374,15 +374,15 @@ impl Bison {
         Ok(py_collections)
     }
 
-    #[pyo3(signature = (collection_name, update_query, maybe_query = None))]
+    #[pyo3(signature = (collection_name, update_query, maybe_query = None, return_result=false))]
     pub fn update(
         &mut self,
         collection_name: String,
         update_query: &Bound<'_, PyDict>,
         maybe_query: Option<&Bound<'_, PyDict>>,
-    ) -> PyResult<PyObject> {
+        return_result: bool,
+    ) -> PyResult<Option<PyObject>> {
         // Reset cache after every update
-        // TODO: Hardcoded cache size
         self.query_cache = LruCache::new(query::QUERY_CACHE_SIZE);
 
         let in_memory_collection = self.collections.get(&collection_name);
@@ -398,32 +398,39 @@ impl Bison {
             ._update(collection_values.to_vec(), update_query, maybe_query)
             .unwrap();
 
-        let py_collections = {
-            let mut result: Option<PyObject> = None;
-            let mut py_error: Option<PyErr> = None;
 
-            Python::with_gil(|py| {
-                match pythonize(py, &updated_collections) {
-                    Ok(obj) => {
-                        // Convert &PyAny to PyObject
-                        let py_obj = obj.to_object(py);
-                        result = Some(py_obj);
+        let return_value = match return_result {
+            true => {
+                let py_collections = {
+                    let mut result: Option<PyObject> = None;
+                    let mut py_error: Option<PyErr> = None;
+
+                    Python::with_gil(|py| {
+                        match pythonize(py, &updated_collections) {
+                            Ok(obj) => {
+                                // Convert &PyAny to PyObject
+                                let py_obj = obj.to_object(py);
+                                result = Some(py_obj);
+                            }
+                            Err(err) => py_error = Some(err.into()),
+                        }
+                    });
+
+                    if let Some(err) = py_error {
+                        return Err(err);
                     }
-                    Err(err) => py_error = Some(err.into()),
-                }
-            });
-
-            if let Some(err) = py_error {
-                return Err(err);
+                    result.expect("Failed to obtain PyObject")
+                };
+                Some(py_collections)
             }
-            result.expect("Failed to obtain PyObject")
+            false => Option::None,
         };
-
         self.collections.insert(
             collection_name,
             serde_json::Value::Array(updated_collections),
         );
-        Ok(py_collections)
+        return Ok(return_value);
+
     }
 
     pub fn collections(&self) -> PyResult<Vec<String>> {
