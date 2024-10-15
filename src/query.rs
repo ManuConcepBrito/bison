@@ -279,6 +279,8 @@ impl QueryEngine<UpdateOperator> {
                         panic!("Unknown update query operator found: {}", update_op_str)
                     });
                 }
+                println!("Update operator found {:?}", update_op);
+                println!("Fields: {:?}", fields);
                 Query {
                     fields,
                     value,

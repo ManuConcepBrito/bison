@@ -7,7 +7,7 @@ use pyo3::PyObject;
 use pythonize::{depythonize, pythonize};
 use query::{QueryOperator, UpdateOperator};
 use serde_json::{Map, Value};
-use std::borrow::Cow;
+use std::collections::HashMap;
 use std::fs;
 use std::fs::rename;
 use std::fs::File;
@@ -17,14 +17,15 @@ use std::io;
 use std::io::BufWriter;
 use std::io::{BufReader, Write};
 use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
 
 mod query;
 
 #[pyclass]
 pub struct Bison {
     base_path: PathBuf,
-    collections: Map<String, Value>,
-    query_cache: LruCache<u64, Vec<Value>>,
+    collections: HashMap<String, Arc<RwLock<Vec<Value>>>>,
+    query_cache: LruCache<u64, Arc<RwLock<Vec<Value>>>>,
 }
 impl Bison {
     fn get_collection_path(&self, collection_name: &str) -> PathBuf {
@@ -54,7 +55,7 @@ impl Bison {
             .map_err(|_| PyErr::new::<PyValueError, _>("Error deserializing JSON"))?;
         Ok(json_value)
     }
-    fn find_collection_in_storage(&mut self, collection_name: &str) -> Result<Vec<Value>, PyErr> {
+    fn update_in_memory_collections(&mut self, collection_name: &str) -> Result<(), PyErr> {
         // Try to load from disk
         let mut collection_path = self.base_path.clone().join(PathBuf::from(collection_name));
         collection_path.set_extension("json");
@@ -66,27 +67,13 @@ impl Bison {
         }
 
         // Load the collection from disk
-        let values_in_storage: Map<String, Value> =
-            Bison::read_document(collection_path.to_str().unwrap())?
-                .as_object()
-                .unwrap()
-                .to_owned();
-
-        // Extract the collection by key, convert to Vec<Value> and return as owned
-        let loaded_collection = values_in_storage
-            .get(collection_name)
-            .unwrap()
-            .as_array()
-            .unwrap()
-            .clone();
-
-        // Store it in `self.collections` for future use
-        self.collections.insert(
-            collection_name.to_string(),
-            Value::Array(loaded_collection.clone()),
-        );
-
-        Ok(loaded_collection)
+        let values_in_storage: Value = Bison::read_document(collection_path.to_str().unwrap())?;
+        let collection = values_in_storage.get(collection_name).unwrap();
+        let collection_arr = collection.as_array().unwrap();
+        let collection_arc = Arc::new(RwLock::new(collection_arr.clone()));
+        self.collections
+            .insert(collection_name.to_string(), collection_arc);
+        Ok(())
     }
 
     pub fn extract_collection(
@@ -118,20 +105,20 @@ impl Bison {
             let _ = self.create_collection(collection_name);
         }
 
-        let collection = self.collections.get_mut(collection_name);
+        let collection_arc = self.collections.get(collection_name).unwrap();
 
-        if let Some(Value::Array(arr)) = collection {
+        {
+            let mut collection = collection_arc.write().unwrap();
             // Extend the collection if the value to insert is an array
             if let Some(insert_value_arr) = insert_value.as_array() {
-                arr.extend_from_slice(insert_value_arr)
+                collection.extend_from_slice(insert_value_arr)
             } else {
-                arr.push(insert_value);
+                collection.push(insert_value);
             }
-        } else {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "Expected collection to be array",
-            ));
         }
+
+        self.collections
+            .insert(collection_name.to_string(), collection_arc.clone());
         Ok(())
     }
 
@@ -139,22 +126,23 @@ impl Bison {
         &mut self,
         collection_name: &str,
         maybe_query: Option<&Bound<'_, PyDict>>,
-    ) -> Result<Vec<Value>, PyErr> {
+    ) -> Result<Arc<RwLock<Vec<Value>>>, PyErr> {
         // Inner method that returns Vec<Value> instead
         // of a python dict
         let in_memory_collection = self.collections.get(collection_name);
-        let collection_values: Cow<Vec<Value>> = match in_memory_collection {
-            Some(c) => Cow::Borrowed(c.as_array().unwrap()),
-            None => match self.find_collection_in_storage(collection_name) {
-                Ok(in_storage_collection) => Cow::Owned(in_storage_collection),
+        let collection_arc = match in_memory_collection {
+            Some(c) => c,
+            None => match self.update_in_memory_collections(collection_name) {
+                Ok(_) => self.collections.get(collection_name).unwrap(),
                 Err(err) => return Err(err),
             },
         };
+
         let query: Value = match maybe_query {
             Some(q) => depythonize(q).unwrap(),
             None => {
                 // If there is no query, return all the values
-                return Ok(collection_values.to_vec());
+                return Ok(collection_arc.clone());
             }
         };
 
@@ -163,12 +151,13 @@ impl Bison {
         query_object.hash(&mut hasher);
         let query_hash = hasher.finish();
         if let Some(cached_collections) = self.query_cache.get(&query_hash) {
-            return Ok(cached_collections.to_vec());
+            return Ok(cached_collections.clone());
         }
         let query_engine = query::QueryEngine::<QueryOperator>::new(query_object);
         // execute queries and return collections
         let mut found_collections: Vec<Value> = vec![];
-        for collection in collection_values.iter() {
+        let read_collections = collection_arc.read().unwrap();
+        for collection in read_collections.iter() {
             let c_obj = collection.as_object().unwrap();
             let query_result = query_engine.execute(c_obj);
             match query_result {
@@ -180,41 +169,56 @@ impl Bison {
                 Err(err) => return Err(err),
             }
         }
-        self.query_cache.put(query_hash, found_collections.to_vec());
-        Ok(found_collections)
+        let found_collections_arc = Arc::new(RwLock::new(found_collections));
+        self.query_cache
+            .put(query_hash, found_collections_arc.clone());
+        Ok(found_collections_arc)
     }
     fn _update(
         &mut self,
-        mut collection_values: Vec<Value>,
+        collection_name: &str,
         py_update_query: &Bound<'_, PyDict>,
         maybe_filter_query: Option<&Bound<'_, PyDict>>,
-    ) -> Result<Vec<Value>, PyErr> {
-        let update_query: Value = depythonize(py_update_query).unwrap();
-        let update_query_object: &Map<String, Value> = update_query.as_object().unwrap();
-        let update_query_engine = query::QueryEngine::<UpdateOperator>::new(update_query_object);
-        match maybe_filter_query {
-            Some(q) => {
-                let filter_query: Value = depythonize(q).unwrap();
-                let filter_query_object: &Map<String, Value> = filter_query.as_object().unwrap();
-                let filter_query_engine =
-                    query::QueryEngine::<QueryOperator>::new(filter_query_object);
-                collection_values.iter_mut().for_each(|c| {
-                    let c_obj = c.as_object_mut().unwrap();
-                    if filter_query_engine.execute(c_obj).unwrap() {
-                        // Do update
-                        update_query_engine.execute(c_obj)
-                    }
-                })
-            }
-            None => collection_values.iter_mut().for_each(|c| {
-                let c_obj = c.as_object_mut().unwrap();
-                update_query_engine.execute(c_obj)
-            }),
+    ) -> Result<Arc<RwLock<Vec<Value>>>, PyErr> {
+        let in_memory_collection = self.collections.get(collection_name);
+        let collection_values_arc = match in_memory_collection {
+            Some(c) => c,
+            None => match self.update_in_memory_collections(&collection_name) {
+                Ok(_) => self.collections.get(collection_name).unwrap(),
+                Err(err) => return Err(err),
+            },
         };
-        Ok(collection_values)
+        {
+
+            let mut collection_values = collection_values_arc.write().unwrap();
+            let update_query: Value = depythonize(py_update_query).unwrap();
+            let update_query_object: &Map<String, Value> = update_query.as_object().unwrap();
+            let update_query_engine = query::QueryEngine::<UpdateOperator>::new(update_query_object);
+            match maybe_filter_query {
+                Some(q) => {
+                    let filter_query: Value = depythonize(q).unwrap();
+                    let filter_query_object: &Map<String, Value> = filter_query.as_object().unwrap();
+                    let filter_query_engine =
+                    query::QueryEngine::<QueryOperator>::new(filter_query_object);
+                    collection_values.iter_mut().for_each(|c| {
+                        let c_obj = c.as_object_mut().unwrap();
+                        if filter_query_engine.execute(c_obj).unwrap() {
+                            // Do update
+                            update_query_engine.execute(c_obj)
+                        }
+                    })
+                }
+                None => collection_values.iter_mut().for_each(|c| {
+                    let c_obj = c.as_object_mut().unwrap();
+                    update_query_engine.execute(c_obj)
+                }),
+            };
+
+        }
+        Ok(collection_values_arc.clone())
     }
 
-    fn _write(&self, collection_name: &str, document: &Vec<Value>) -> Result<(), PyErr> {
+    fn _write(&self, collection_name: &str, document: Arc<RwLock<Vec<Value>>>) -> Result<(), PyErr> {
         let path = self.get_collection_path(collection_name);
         let temp_path = format!("{}.tmp", collection_name); // Temporary file
         let temp_file_result = OpenOptions::new()
@@ -233,7 +237,8 @@ impl Bison {
         };
 
         let mut writer = BufWriter::new(temp_file);
-        match serde_json::to_writer(&mut writer, &document) {
+        let doc: &Vec<Value> = &document.read().unwrap();
+        match serde_json::to_writer(&mut writer, doc) {
             Ok(_) => {
                 writer.flush().unwrap();
             }
@@ -263,7 +268,7 @@ impl Bison {
             let _ = fs::create_dir(&base_path);
         }
 
-        let collections = serde_json::Map::new();
+        let collections = HashMap::new();
         let query_cache = LruCache::new(query::QUERY_CACHE_SIZE);
         let mut db = Bison {
             base_path,
@@ -300,8 +305,9 @@ impl Bison {
         // Write the JSON data to the file
         let json_data = format!("{{ \"{}\":[] }}", collection_name);
         file.write_all(json_data.as_bytes())?;
+        let empty_collection: Arc<RwLock<Vec<Value>>> = Arc::new(RwLock::new(Vec::new()));
         self.collections
-            .insert(collection_name.to_string(), Value::Array(vec![]));
+            .insert(collection_name.to_string(), empty_collection);
         Ok(())
     }
 
@@ -355,7 +361,7 @@ impl Bison {
             let mut py_error: Option<PyErr> = None;
 
             Python::with_gil(|py| {
-                match pythonize(py, &found_collections) {
+                match pythonize(py, found_collections.as_ref()) {
                     Ok(obj) => {
                         // Convert &PyAny to PyObject
                         let py_obj = obj.to_object(py);
@@ -385,19 +391,9 @@ impl Bison {
         // Reset cache after every update
         self.query_cache = LruCache::new(query::QUERY_CACHE_SIZE);
 
-        let in_memory_collection = self.collections.get(&collection_name);
-        let collection_values: Cow<Vec<Value>> = match in_memory_collection {
-            Some(c) => Cow::Borrowed(c.as_array().unwrap()),
-            None => match self.find_collection_in_storage(&collection_name) {
-                Ok(in_storage_collection) => Cow::Owned(in_storage_collection),
-                Err(err) => return Err(err),
-            },
-        };
-
         let updated_collections = self
-            ._update(collection_values.to_vec(), update_query, maybe_query)
+            ._update(&collection_name, update_query, maybe_query)
             .unwrap();
-
 
         let return_value = match return_result {
             true => {
@@ -406,7 +402,7 @@ impl Bison {
                     let mut py_error: Option<PyErr> = None;
 
                     Python::with_gil(|py| {
-                        match pythonize(py, &updated_collections) {
+                        match pythonize(py, updated_collections.as_ref()) {
                             Ok(obj) => {
                                 // Convert &PyAny to PyObject
                                 let py_obj = obj.to_object(py);
@@ -425,12 +421,9 @@ impl Bison {
             }
             false => Option::None,
         };
-        self.collections.insert(
-            collection_name,
-            serde_json::Value::Array(updated_collections),
-        );
+        self.collections
+            .insert(collection_name, updated_collections);
         return Ok(return_value);
-
     }
 
     pub fn collections(&self) -> PyResult<Vec<String>> {
@@ -469,7 +462,7 @@ impl Bison {
     }
     pub fn write(&self, collection_name: String) -> PyResult<()> {
         match self.collections.get(&collection_name) {
-            Some(collection) => self._write(&collection_name, collection.as_array().unwrap()),
+            Some(collection) => self._write(&collection_name, collection.clone()),
             None => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
                 "Collection '{}' not found in stored collections",
                 collection_name
@@ -483,7 +476,7 @@ impl Bison {
             .iter()
             .map(|(collection_name, values)| {
                 // TODO: Probably need to return the PyErr in case it happens
-                let _ = self._write(collection_name, values.as_array().unwrap());
+                let _ = self._write(collection_name, values.clone());
             })
             .collect::<Vec<_>>();
 
