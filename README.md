@@ -27,7 +27,8 @@ pip install bison-db
 ## Performance
 I decided to compare Bison against TinyDB as it is the most similar database to Bison in terms of purpose.
 In our performance benchmarks, Bison is around 2-13x faster than TinyDB (depending on the type of operations and
-number of documents).
+number of documents). The chart shows the median time to execute 1000 operations on a database with 1000 collections.
+Each update triggers a write to file in both Bison and TinyDB.
 
 <p align="center">
   <img height="256" src="https://github.com/ManuConcepBrito/bison/blob/master/docs/0001_1000_ops_1000_docs.png" alt="Bison">

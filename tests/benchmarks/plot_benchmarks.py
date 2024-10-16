@@ -19,7 +19,6 @@ def plot_benchmark(file_name: str):
     with open(file_name, "r") as f:
         data = json.load(f)
 
-    # Organize data
     experiments = ["50% Reads, 50% Updates", "95% Reads, 5% Updates"]
     databases = ["Bison", "TinyDB"]
     median_times = {
@@ -44,20 +43,22 @@ def plot_benchmark(file_name: str):
             median_times[param][db] = median_time
 
     # Plotting
-    x = np.arange(len(experiments))  # the label locations
-    width = 0.35  # the width of the bars
+    x = np.arange(len(experiments))
+    width = 0.25
 
-    fig, ax = plt.subplots()
+    fig, ax = plt.subplots(figsize=(8, 6))
 
-    # Get the TinyDB and Bison-DB median times for each experiment
+    # Get the Bison and TinyDB median times for each experiment
     bisondb_medians = [median_times[exp]["Bison"] for exp in experiments]
     tinydb_medians = [median_times[exp]["TinyDB"] for exp in experiments]
-    # Create the bar chart
+
+    # Bison bars first
     rects1 = ax.bar(
-        x + width / 2, bisondb_medians, width, label="Bison", color="#33a02c"
+        x - width / 2, bisondb_medians, width, label="Bison", color="#33a02c"
     )
-    rects2 = ax.bar(x - width / 2, tinydb_medians,
-                    width, label="TinyDB", color="#1f78b4")
+    rects2 = ax.bar(
+        x + width / 2, tinydb_medians, width, label="TinyDB", color="#1f78b4"
+    )
 
     # Add labels, title, and custom x-axis tick labels
     ax.set_xlabel("Experiment")
