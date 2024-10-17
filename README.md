@@ -189,9 +189,9 @@ You can combine multiple query conditions, including nested fields:
 result = db.find(
     "test",
     {
-        "a": {"$eq": {"myobj": 20}},
+        "a": {"nested_field": {"myobj": 20}},
         "b": {"$gt": 19},
-        "c": {"$lte": 120}
+        "c": {"nested_field": {"really_nested": {"$lte": 120} } }
     }
 )
 print(result)  # Returns documents matching all the conditions
