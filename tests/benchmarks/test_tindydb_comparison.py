@@ -36,7 +36,7 @@ def test_bisondb_benchmark(
                     "test",
                     {
                         "balance": {"$set": op["update"]["balance"]["$set"]},
-                        "address": {
+                        "address.zip": {
                             "zip": {"$set": op["update"]["address.zip"]["$set"]}
                         },
                     },

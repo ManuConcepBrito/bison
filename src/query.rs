@@ -305,8 +305,12 @@ fn parse_query(sub_query: &Value, key: &str, fields: &mut Vec<String>) -> Value 
      * When there is a nested query like {"a": {"b": 10} } it will extract the fields
      * ["a", "b"] to be able to follow the collection and return the value (10).
      */
-    fields.push(key.to_string());
-
+    if key.contains(".") {
+        let nested_fields = key.split(".").map(|k| k.to_string());
+        fields.extend(nested_fields)
+    } else {
+        fields.push(key.to_string());
+    }
     match sub_query {
         Value::Object(map) => map
             .into_iter()

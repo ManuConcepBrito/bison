@@ -14,6 +14,7 @@ Bison is a fast, lightweight NoSQL database, written in Rust with seamless Pytho
 - **Update Operators**: Modify documents using `$set`, `$inc`, `$dec`, `$add`, `$substract`, and `$delete` operators.
 - **Mixed Queries**: Perform complex queries with multiple conditions and nested fields.
 - **Conditional Updates**: Update only the documents that match a query filter.
+- **Simple nested field access**: Access nested fields using dot notation.
 - **Python Bindings**: Fully integrated with Python via bindings, allowing you to use Bison in Python projects.
 - **File Commit**: Changes are committed to disk only when explicitly requested via `db.write()` or `db.write_all()`.
 
@@ -191,7 +192,7 @@ result = db.find(
     {
         "a": {"nested_field": {"myobj": 20}},
         "b": {"$gt": 19},
-        "c": {"nested_field": {"really_nested": {"$lte": 120} } }
+        "c.nested_field.really_nested": {"$lte": 120}
     }
 )
 print(result)  # Returns documents matching all the conditions

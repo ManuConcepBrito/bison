@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
         ({"a": 10, "b": 20}, {"a": 10}),
         ({"a": True, "b": False}, {"b": False}),
         ({"a": "my_name", "b": 20, "c": False}, {"a": "my_name"}),
+        ({"a": {"b": {"c": 10}}}, {"a.b.c": 10}),
     ],
 )
 def test_simple_eq_query(
@@ -33,6 +34,7 @@ def test_simple_eq_query(
     [
         ({"a": 10, "b": 20}, {"a": {"$eq": 10}}),
         ({"a": True, "b": {"c": 10}}, {"b": {"$eq": {"c": 10}}}),
+        ({"a": {"b": {"c": 10}}}, {"a.b.c": {"$eq": 10}}),
     ],
 )
 def test_eq_query(
@@ -56,6 +58,7 @@ def test_eq_query(
         ({"a": 10, "b": 20}, {"a": {"$ne": 20}}),
         ({"a": True, "b": {"c": 10}}, {"b": {"$ne": {"d": 10}}}),
         ({"a": True, "b": {"c": 10}}, {"b": {"$ne": {"c": 20}}}),
+        ({"a": {"b": {"c": 30}}}, {"a.b.c": {"$ne": 10}}),
     ],
 )
 def test_ne_query(
@@ -150,6 +153,12 @@ def test_mixed_queries(db: Bison):
         ({"a": 20}, {"a": {"$set": 40}}, {"a": 40}),
         ({"a": {"b": 20}}, {"a": {"b": {"$set": 40}}}, {"a": {"b": 40}}),
         ({"a": {"b": 20}}, {"a": {"$set": {"c": 30}}}, {"a": {"c": 30}}),
+        ({"a": {"b": 20}}, {"a.b": 40}, {"a": {"b": 40}}),
+        (
+            {"a": {"b": {"c": 20}}},
+            {"a.b": {"$set": {"d": 40}}},
+            {"a": {"b": {"d": 40}}},
+        ),
     ],
 )
 def test_simple_set_update(
