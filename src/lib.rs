@@ -185,7 +185,7 @@ impl Bison {
         let in_memory_collection = self.collections.get(collection_name);
         let collection_values_arc = match in_memory_collection {
             Some(c) => c,
-            None => match self.update_in_memory_collections(&collection_name) {
+            None => match self.update_in_memory_collections(collection_name) {
                 Ok(_) => self.collections.get(collection_name).unwrap(),
                 Err(err) => return Err(err),
             },
@@ -310,14 +310,14 @@ impl Bison {
     }
     pub fn load_from_document(&mut self, document_path: &str) -> PyResult<()> {
         // Initializes a database from an existing document
-        let document: Map<String, Value> = Bison::read_document(&document_path)?
+        let document: Map<String, Value> = Bison::read_document(document_path)?
             .as_object()
             .unwrap()
             .to_owned();
         for (key, value) in document {
             self.insert_in_collection(&key, value)?
         }
-        return Ok(());
+        Ok(())
     }
     pub fn create_collection(&mut self, collection_name: &str) -> PyResult<()> {
         let path = self.get_collection_path(collection_name);
@@ -448,7 +448,7 @@ impl Bison {
         };
         self.collections
             .insert(collection_name, updated_collections);
-        return Ok(return_value);
+        Ok(return_value)
     }
 
     pub fn collections(&self) -> PyResult<Vec<String>> {

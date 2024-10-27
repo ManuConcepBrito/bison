@@ -102,10 +102,10 @@ impl Query<QueryOperator> {
                 {
                     return Ok(found_value.clone().as_f64() > query_value.clone().as_f64());
                 }
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
                     "Malformed query, non-numeric value found for operator {:?}",
                     self.operator
-                )));
+                )))
             }
 
             QueryOperator::LessThan => {
@@ -115,10 +115,10 @@ impl Query<QueryOperator> {
                     return Ok(found_value.clone().as_f64() < query_value.clone().as_f64());
                 }
 
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
                     "Malformed query, non-numeric value found for operator {:?}",
                     self.operator
-                )));
+                )))
             }
 
             QueryOperator::GreaterThanEqual => {
@@ -128,10 +128,10 @@ impl Query<QueryOperator> {
                     return Ok(found_value.clone().as_f64() >= query_value.clone().as_f64());
                 }
 
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
                     "Malformed query, non-numeric value found for operator {:?}",
                     self.operator
-                )));
+                )))
             }
             QueryOperator::LessThanEqual => {
                 if let (Some(query_value), Some(found_value)) =
@@ -140,10 +140,10 @@ impl Query<QueryOperator> {
                     return Ok(found_value.clone().as_f64() <= query_value.clone().as_f64());
                 }
 
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
                     "Malformed query, non-numeric value found for operator {:?}",
                     self.operator
-                )));
+                )))
             }
         }
     }
@@ -255,8 +255,10 @@ impl QueryEngine<QueryOperator> {
     pub fn execute(&self, collection: &Map<String, Value>) -> Result<bool, PyErr> {
         let query_iter = self.queries.iter();
         for q in query_iter {
-            let query_result = q.execute(collection);
-            return query_result;
+            let query_result = q.execute(collection)?;
+            if !query_result {
+                return Ok(query_result)
+            }
         }
         Ok(true)
     }

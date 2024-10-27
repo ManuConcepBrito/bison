@@ -25,7 +25,7 @@ def test_load_database(benchmark, tmp_path: Path, benchmark_dataset) -> None:
 
 
 @pytest.mark.north_start
-def test_insert(
+def test_insert_many(
     benchmark, tmp_path: Path, benchmark_dataset
 ) -> None:
     db = Bison(str(tmp_path))
